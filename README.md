@@ -20,3 +20,8 @@
 
 ## MISC
 1. How dimension of vector space affects the performance of RAG
+
+
+#Articles
+Chunking with Clustering - https://towardsdatascience.com/improving-rag-chunking-with-clustering-03c1cf41f1cd/
+Query translation - https://raghunaathan.medium.com/query-translation-for-rag-retrieval-augmented-generation-applications-46d74bff8f07
