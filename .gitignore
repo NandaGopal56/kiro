@@ -12,3 +12,5 @@ wheels/
 *docx
 chroma_db
 chroma_store
+*chroma_db*
+*.png
