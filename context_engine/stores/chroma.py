@@ -10,7 +10,7 @@ import chromadb
 
 from ..embedders.base import Embedder
 from ..embedders.hash import HashEmbedder
-from ..engine import Doc
+from ..documents import Doc
 
 
 class ChromaStore:

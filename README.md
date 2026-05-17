@@ -10,7 +10,9 @@ embedder, and store packages stay independently replaceable.
 
 ```
 context_engine/
-  engine.py         # ContextEngine, ContextEngineConfig, Doc, ParsedDoc
+  engine.py         # ContextEngine client entry point
+  config.py         # ContextEngineConfig defaults
+  documents.py      # Doc, ParsedDoc data structures
 
   loaders/          # AutoLoader, PdfMarkdownLoader (+ future: web, docx, ...)
   summarizers/      # OpenAISummarizer for tables/images

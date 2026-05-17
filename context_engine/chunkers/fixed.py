@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from langchain_text_splitters import CharacterTextSplitter
 
-from ..engine import Doc
+from .schema import Doc
 from .base import Chunker
 
 

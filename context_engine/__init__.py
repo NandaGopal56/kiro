@@ -1,6 +1,8 @@
 """Context engine entry point plus composable RAG building blocks."""
 
-from .engine import ContextEngine, ContextEngineConfig, Doc, ParsedDoc
+from .config import ContextEngineConfig
+from .documents import Doc, ParsedDoc
+from .engine import ContextEngine
 from .loaders import AutoLoader, ExtractionResult, PdfMarkdownLoader
 
 __all__ = [

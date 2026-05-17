@@ -5,7 +5,7 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
 )
 
-from ..engine import Doc
+from .schema import Doc
 from .base import Chunker, clean_chunk
 
 

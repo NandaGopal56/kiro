@@ -3,7 +3,7 @@ from __future__ import annotations
 from langchain_experimental.text_splitter import SemanticChunker as _SemanticChunker
 from langchain_openai import OpenAIEmbeddings
 
-from ..engine import Doc
+from .schema import Doc
 from .base import Chunker
 
 

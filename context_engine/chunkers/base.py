@@ -4,7 +4,7 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 
-from ..engine import Doc
+from .schema import Doc
 
 
 def clean_chunk(text: str) -> str:
