@@ -13,4 +13,5 @@ wheels/
 chroma_db
 chroma_store
 *chroma_db*
+.rag_chroma*
 *.png
