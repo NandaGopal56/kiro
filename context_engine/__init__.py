@@ -1,7 +1,8 @@
 """Context engine entry point plus composable RAG building blocks."""
 
 from .config import ContextEngineConfig
-from .documents import Doc, ParsedDoc
+from .chunkers.schema import Doc
+from .loaders.schema import ParsedDoc
 from .engine import ContextEngine
 from .loaders import AutoLoader, ExtractionResult, PdfMarkdownLoader
 

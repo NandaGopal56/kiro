@@ -6,7 +6,8 @@ from typing import Any
 from . import chunkers, embedders, loaders, stores, summarizers
 from .chunkers.base import Chunker
 from .config import ContextEngineConfig
-from .documents import Doc, ParsedDoc
+from .chunkers.schema import Doc
+from .loaders.schema import ParsedDoc
 from .loaders.base import Loader
 from .stores.base import VectorStore
 
