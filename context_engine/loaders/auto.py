@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..types import ParsedDoc
+from ..engine import ParsedDoc
 from .base import Loader
 from .pdf_markdown import PdfMarkdownLoader
 

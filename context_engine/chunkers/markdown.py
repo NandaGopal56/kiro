@@ -5,9 +5,8 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
 )
 
-from ..text import clean_chunk
-from ..types import Doc
-from .base import Chunker
+from ..engine import Doc
+from .base import Chunker, clean_chunk
 
 
 class MarkdownChunker(Chunker):

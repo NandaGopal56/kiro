@@ -15,7 +15,7 @@ from docling_core.types.doc.base import ImageRefMode
 from docling_core.types.doc.document import ContentLayer
 from markdowncleaner import CleanerOptions, MarkdownCleaner
 
-from ..types import ParsedDoc
+from ..engine import ParsedDoc
 from .base import ExtractionResult, Loader
 
 

@@ -1,19 +1,18 @@
 # RAG
 
-A small, composable toolkit for building a production RAG pipeline.
-Start with a single PDF; extend to more sources, providers, and stores by
-dropping a new class into the matching subpackage.
+A small, composable toolkit for building a context engine that can be used
+from an agent tool, a web API, a script, or a notebook.
+
+Use `ContextEngine` as the main entry point. The lower-level loader, chunker,
+embedder, and store packages stay independently replaceable.
 
 ## Layout
 
 ```
 context_engine/
-  types.py          # Doc, ParsedDoc
-  text.py           # clean_text, clean_chunk
-  config.py         # RAGConfig
-  rag.py            # Ingestor (load -> chunk -> store)
+  engine.py         # ContextEngine, ContextEngineConfig, Doc, ParsedDoc
 
-  loaders/          # AutoLoader, PdfLoader, PdfMarkdownLoader (+ future: web, docx, ...)
+  loaders/          # AutoLoader, PdfMarkdownLoader (+ future: web, docx, ...)
   summarizers/      # OpenAISummarizer for tables/images
   chunkers/         # FixedChunker, RecursiveChunker, MarkdownChunker, SemanticChunker
   embedders/        # HashEmbedder (test) (+ future: openai, cohere, ...)
@@ -29,43 +28,101 @@ Each subpackage exposes:
 
 Adding a new source/provider = add a class, add one line to `REGISTRY`.
 
-## End-to-end ingestion
+## Main Entry Point
 
 ```python
-from context_engine import Ingestor, RAGConfig
+from context_engine import ContextEngine, ContextEngineConfig
 
-config = RAGConfig(
+engine = ContextEngine(
+    ContextEngineConfig(
+        loader="auto",
+        chunker="recursive",
+        store="chroma",
+        store_kwargs={
+            "collection_name": "coffee",
+            "persist_directory": ".rag_chroma",
+        },
+        embedder="hash",  # local deterministic embeddings for testing
+    )
+)
+
+ids = engine.ingest("data/coffee_processing.pdf")
+matches = engine.retrieve("How is washed coffee processed?", k=3)
+```
+
+Override a process per request when an agent or API caller needs a different
+strategy:
+
+```python
+ids = engine.ingest(
+    "data/contract.pdf",
     loader="pdf",
-    loader_kwargs={"context_window": 3},
+    chunker="markdown",
+    chunker_kwargs={"chunk_size": 1000, "chunk_overlap": 150, "source": "contract"},
+)
+
+matches = engine.retrieve(
+    "What are the termination terms?",
+    k=5,
+    where={"source": "contract"},
+)
+```
+
+For a web API, keep one engine instance at app startup and serialize returned
+docs:
+
+```python
+from context_engine import ContextEngine
+
+engine = ContextEngine()
+
+
+def retrieve_handler(query: str) -> list[dict]:
+    return [doc.as_dict() for doc in engine.retrieve(query, k=4)]
+```
+
+For an agent framework, adapt the framework-neutral callables:
+
+```python
+engine = ContextEngine()
+tools = engine.tools()
+
+tools["context_ingest"](source="data/handbook.pdf")
+tools["context_retrieve"](query="What is the refund policy?", k=3)
+```
+
+## Configuration
+
+```python
+from context_engine import ContextEngineConfig
+
+config = ContextEngineConfig(
+    loader="auto",
+    loader_kwargs={"output_dir": "data/extracted"},
     chunker="recursive",
     chunker_kwargs={"chunk_size": 500, "chunk_overlap": 80, "source": "coffee_guide"},
     store="chroma",
     store_kwargs={"collection_name": "coffee", "persist_directory": ".rag_chroma"},
-    embedder="hash",          # swap to a real provider for production
-    summarizer=None,          # set to "openai" to summarize tables/images
+    embedder="hash",
+    summarizer=None,  # set to "openai" to summarize tables/images
 )
-
-ingestor = Ingestor.from_config(config)
-ids = ingestor.ingest("data/coffee_processing.pdf")
-matches = ingestor.search("How is washed coffee processed?", k=3)
 ```
 
 Compose by hand if you want full control:
 
 ```python
-from context_engine import Ingestor
+from context_engine import ContextEngine
 from context_engine.chunkers import RecursiveChunker
 from context_engine.embedders import HashEmbedder
-from context_engine.loaders import PdfLoader
+from context_engine.loaders import PdfMarkdownLoader
 from context_engine.stores import ChromaStore
-from context_engine.summarizers import OpenAISummarizer
 
-ingestor = Ingestor(
-    loader=PdfLoader(summarizer=OpenAISummarizer()),
+engine = ContextEngine(
+    loader=PdfMarkdownLoader(output_dir="data/extracted"),
     chunker=RecursiveChunker(chunk_size=500, chunk_overlap=80, source="coffee_guide"),
     store=ChromaStore(collection_name="coffee", embedder=HashEmbedder()),
 )
-chunks = ingestor.run("data/coffee_processing.pdf")
+chunks = engine.run("data/coffee_processing.pdf")
 ```
 
 ## PDF Markdown extraction
@@ -74,17 +131,17 @@ For structure-aware PDF chunking, use the Markdown PDF loader and then chunk
 the Markdown output:
 
 ```python
-from context_engine import Ingestor, RAGConfig
+from context_engine import ContextEngine, ContextEngineConfig
 
-config = RAGConfig(
+config = ContextEngineConfig(
     loader="auto",
     loader_kwargs={"output_dir": "data/extracted"},
     chunker="markdown",
     chunker_kwargs={"chunk_size": 1000, "chunk_overlap": 150, "source": "contract"},
 )
 
-ingestor = Ingestor.from_config(config)
-chunks = ingestor.run("data/SampleContract.pdf")
+engine = ContextEngine(config)
+chunks = engine.run("data/SampleContract.pdf")
 ```
 
 `AutoLoader` chooses the loader from the file extension. Currently `.pdf` uses
@@ -105,7 +162,8 @@ print(result.text_path)
 
 `fixed` / `character`, `recursive`, `markdown` / `md`, `semantic`. Each lives in
 `context_engine/chunkers/`. Pass strategy-specific kwargs via
-`RAGConfig.chunker_kwargs` or directly to the class.
+`ContextEngineConfig.chunker_kwargs`, per-call `chunker_kwargs`, or directly to
+the class.
 
 ## Vector store
 
@@ -153,7 +211,7 @@ results = evaluate(
 1. Drop a new class into the matching subpackage (e.g. `loaders/web.py`).
 2. Make it inherit from the `base.py` contract.
 3. Register it in that subpackage's `__init__.py` `REGISTRY` under a short name.
-4. Reference the new name from `RAGConfig`.
+4. Reference the new name from `ContextEngineConfig` or pass it to a method.
 
 That's the whole extension story — no factories, no orchestrator edits.
 

@@ -4,12 +4,11 @@ from typing import Any
 
 from .auto import AutoLoader
 from .base import ExtractionResult, Loader
-from .pdf import PdfLoader
 from .pdf_markdown import PdfMarkdownLoader
 
 REGISTRY: dict[str, type[Loader]] = {
     "auto": AutoLoader,
-    "pdf": PdfLoader,
+    "pdf": PdfMarkdownLoader,
     "pdf_markdown": PdfMarkdownLoader,
 }
 
@@ -28,7 +27,6 @@ __all__ = [
     "AutoLoader",
     "ExtractionResult",
     "Loader",
-    "PdfLoader",
     "PdfMarkdownLoader",
     "REGISTRY",
     "get",

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..types import ParsedDoc
+from ..engine import ParsedDoc
 
 
 @dataclass(slots=True)
