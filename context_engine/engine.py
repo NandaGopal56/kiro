@@ -18,7 +18,6 @@ class ContextEngine:
 
     def __init__(
         self,
-        *,
         loader: Loader | None = None,
         chunker: Chunker | None = None,
         store: VectorStore | None = None,
@@ -30,7 +29,6 @@ class ContextEngine:
     def ingest(
         self,
         source: str,
-        *,
         include_images: bool = True,
         include_tables: bool = True,
         upsert: bool = True,
@@ -48,7 +46,6 @@ class ContextEngine:
     def retrieve(
         self,
         query: str,
-        *,
         k: int = 4,
         where: dict[str, Any] | None = None,
     ) -> list[Doc]:
