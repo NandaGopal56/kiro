@@ -17,3 +17,4 @@ chroma_store
 *.png
 *data
 *cache
+.DS_Store
