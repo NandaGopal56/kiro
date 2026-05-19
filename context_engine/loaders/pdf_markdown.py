@@ -78,11 +78,11 @@ class PdfMarkdownLoader(Loader):
         self.output_dir = Path(output_dir).resolve() if output_dir else None
         self.clean = clean
 
-    def load(self, source: str) -> ParsedDoc:
-        result = self.extract(source)
+    async def load(self, source: str) -> ParsedDoc:
+        result = await self.extract(source)
         return ParsedDoc(texts=[result.text])
 
-    def extract(self, source: str | Path) -> ExtractionResult:
+    async def extract(self, source: str | Path) -> ExtractionResult:
         pdf_path = Path(source).resolve()
         document_dir = self._document_dir(pdf_path)
         document_dir.mkdir(parents=True, exist_ok=True)

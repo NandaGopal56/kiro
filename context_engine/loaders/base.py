@@ -23,5 +23,5 @@ class Loader(ABC):
     """Base for source-specific loaders. Implementations turn a source into a ParsedDoc."""
 
     @abstractmethod
-    def load(self, source: str) -> ParsedDoc:
+    async def load(self, source: str) -> ParsedDoc:
         ...

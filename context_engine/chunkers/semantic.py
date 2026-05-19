@@ -31,7 +31,7 @@ class SemanticChunker(Chunker):
             splitter_kwargs["breakpoint_threshold_amount"] = breakpoint_threshold_amount
         self.splitter = _SemanticChunker(**splitter_kwargs)
 
-    def split(self, texts: list[str]) -> list[Doc]:
+    async def split(self, texts: list[str]) -> list[Doc]:
         chunks: list[str] = []
         for text in texts:
             chunks.extend(self.splitter.split_text(text))

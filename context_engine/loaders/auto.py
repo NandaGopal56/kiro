@@ -20,8 +20,8 @@ class AutoLoader(Loader):
             ".pdf": PdfMarkdownLoader(output_dir=output_dir, clean=clean),
         }
 
-    def load(self, source: str) -> ParsedDoc:
-        return self._loader_for(source).load(source)
+    async def load(self, source: str) -> ParsedDoc:
+        return await self._loader_for(source).load(source)
 
     def _loader_for(self, source: str | Path) -> Loader:
         suffix = Path(source).suffix.lower()

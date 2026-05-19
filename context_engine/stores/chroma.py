@@ -9,7 +9,7 @@ from typing import Any
 import chromadb
 
 from ..embedders.base import Embedder
-from ..embedders.hash import HashEmbedder
+from ..embedders.openai import OpenAIEmbedder
 from ..chunkers.schema import Doc
 
 
@@ -24,14 +24,14 @@ class ChromaStore:
     ) -> None:
         self.collection_name = collection_name
         self.persist_directory = persist_directory
-        self.embedder = embedder or HashEmbedder()
+        self.embedder = embedder or OpenAIEmbedder()
         self.client = chromadb.PersistentClient(path=persist_directory)
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
             metadata={"hnsw:space": "cosine"},
         )
 
-    def add_documents(
+    async def add_documents(
         self,
         docs: Sequence[Doc],
         ids: Sequence[str] | None = None,
@@ -39,15 +39,16 @@ class ChromaStore:
         if not docs:
             return []
         ids = list(ids) if ids is not None else self._default_ids(docs)
+        embeddings = await self.embedder.embed_documents([d.page_content for d in docs])
         self.collection.add(
             ids=ids,
             documents=[d.page_content for d in docs],
             metadatas=[self._metadata(d.metadata) for d in docs],
-            embeddings=self.embedder.embed_documents([d.page_content for d in docs]),
+            embeddings=embeddings,
         )
         return ids
 
-    def upsert_documents(
+    async def upsert_documents(
         self,
         docs: Sequence[Doc],
         ids: Sequence[str] | None = None,
@@ -55,15 +56,16 @@ class ChromaStore:
         if not docs:
             return []
         ids = list(ids) if ids is not None else self._default_ids(docs)
+        embeddings = await self.embedder.embed_documents([d.page_content for d in docs])
         self.collection.upsert(
             ids=ids,
             documents=[d.page_content for d in docs],
             metadatas=[self._metadata(d.metadata) for d in docs],
-            embeddings=self.embedder.embed_documents([d.page_content for d in docs]),
+            embeddings=embeddings,
         )
         return ids
 
-    def get_documents(
+    async def get_documents(
         self,
         ids: Sequence[str] | None = None,
         where: dict[str, Any] | None = None,
@@ -77,21 +79,22 @@ class ChromaStore:
         )
         return self._to_docs(result)
 
-    def update_documents(
+    async def update_documents(
         self,
         docs: Sequence[Doc],
         ids: Sequence[str],
     ) -> None:
         if not docs:
             return
+        embeddings = await self.embedder.embed_documents([d.page_content for d in docs])
         self.collection.update(
             ids=list(ids),
             documents=[d.page_content for d in docs],
             metadatas=[self._metadata(d.metadata) for d in docs],
-            embeddings=self.embedder.embed_documents([d.page_content for d in docs]),
+            embeddings=embeddings,
         )
 
-    def delete_documents(
+    async def delete_documents(
         self,
         ids: Sequence[str] | None = None,
         where: dict[str, Any] | None = None,
@@ -100,14 +103,15 @@ class ChromaStore:
             ids=list(ids) if ids is not None else None, where=where
         )
 
-    def similarity_search(
+    async def similarity_search(
         self,
         query: str,
         k: int = 4,
         where: dict[str, Any] | None = None,
     ) -> list[Doc]:
+        query_embedding = await self.embedder.embed_query(query)
         result = self.collection.query(
-            query_embeddings=[self.embedder.embed_query(query)],
+            query_embeddings=[query_embedding],
             n_results=k,
             where=where,
             include=["documents", "metadatas", "distances"],
@@ -122,10 +126,10 @@ class ChromaStore:
             )
         ]
 
-    def count(self) -> int:
+    async def count(self) -> int:
         return self.collection.count()
 
-    def clear(self) -> None:
+    async def clear(self) -> None:
         self.client.delete_collection(self.collection_name)
         self.collection = self.client.get_or_create_collection(
             name=self.collection_name,

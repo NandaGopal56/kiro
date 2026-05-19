@@ -16,3 +16,4 @@ chroma_store
 .rag_chroma*
 *.png
 *data
+*cache

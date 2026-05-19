@@ -51,7 +51,7 @@ class MarkdownChunker(Chunker):
             ],
         )
 
-    def split(self, texts: list[str]) -> list[Doc]:
+    async def split(self, texts: list[str]) -> list[Doc]:
         chunks = []
         for text in texts:
             header_splits = self.header_splitter.split_text(text)

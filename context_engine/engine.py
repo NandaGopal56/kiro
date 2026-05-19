@@ -26,30 +26,30 @@ class ContextEngine:
         self.chunker = chunker or chunkers.get("recursive")
         self._store = store
 
-    def ingest(
+    async def ingest(
         self,
         source: str,
         include_images: bool = True,
         include_tables: bool = True,
         upsert: bool = True,
     ) -> list[str]:
-        parsed = self.loader.load(source)
+        parsed = await self.loader.load(source)
         texts = parsed.all_texts(
             include_images=include_images, 
             include_tables=include_tables
         )
-        docs = self.chunker.split(texts)
+        docs = await self.chunker.split(texts)
         if upsert:
-            return self.store.upsert_documents(docs)
-        return self.store.add_documents(docs)
+            return await self.store.upsert_documents(docs)
+        return await self.store.add_documents(docs)
 
-    def retrieve(
+    async def retrieve(
         self,
         query: str,
         k: int = 4,
         where: dict[str, Any] | None = None,
     ) -> list[Doc]:
-        return self.store.similarity_search(
+        return await self.store.similarity_search(
             query,
             k=k,
             where=where,
@@ -58,5 +58,5 @@ class ContextEngine:
     @property
     def store(self) -> VectorStore:
         if self._store is None:
-            self._store = stores.get("chroma", embedder=embedders.get("hash"))
+            self._store = stores.get("chroma", embedder=embedders.get("openai"))
         return self._store

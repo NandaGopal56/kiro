@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from .base import Embedder
-from .hash import HashEmbedder
+from .openai import OpenAIEmbedder
 
 REGISTRY: dict[str, type] = {
-    "hash": HashEmbedder,
+    "openai": OpenAIEmbedder,
 }
 
 
@@ -20,4 +20,4 @@ def get(name: str, **kwargs: Any) -> Embedder:
     return cls(**kwargs)
 
 
-__all__ = ["Embedder", "HashEmbedder", "REGISTRY", "get"]
+__all__ = ["Embedder", "OpenAIEmbedder", "REGISTRY", "get"]

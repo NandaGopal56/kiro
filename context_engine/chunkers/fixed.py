@@ -25,6 +25,6 @@ class FixedChunker(Chunker):
             chunk_overlap=chunk_overlap,
         )
 
-    def split(self, texts: list[str]) -> list[Doc]:
+    async def split(self, texts: list[str]) -> list[Doc]:
         chunks = self.splitter.create_documents(texts)
         return self._finalize(chunk.page_content for chunk in chunks)

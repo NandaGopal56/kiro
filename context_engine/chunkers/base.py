@@ -35,7 +35,7 @@ class Chunker(ABC):
         self.include_empty = include_empty
 
     @abstractmethod
-    def split(self, texts: list[str]) -> list[Doc]:
+    async def split(self, texts: list[str]) -> list[Doc]:
         """Split input texts into Doc chunks."""
 
     def _finalize(self, chunks: Iterable[str]) -> list[Doc]:
