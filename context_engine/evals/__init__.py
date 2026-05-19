@@ -1,8 +1,7 @@
-"""Evaluation primitives that measure RAG without depending on it."""
+from __future__ import annotations
 
-from .metrics import AnswerContains, ContextContains, Metric
-from .runner import RAGCallable, evaluate, run
-from .types import Answer, Result, Sample
+from importlib import import_module
+from typing import Any
 
 __all__ = [
     "Answer",
@@ -15,3 +14,23 @@ __all__ = [
     "evaluate",
     "run",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    mapping = {
+        "Metric": "context_engine.evals.metrics",
+        "AnswerContains": "context_engine.evals.metrics",
+        "ContextContains": "context_engine.evals.metrics",
+        "RAGCallable": "context_engine.evals.runner",
+        "evaluate": "context_engine.evals.runner",
+        "run": "context_engine.evals.runner",
+        "Answer": "context_engine.evals.types",
+        "Result": "context_engine.evals.types",
+        "Sample": "context_engine.evals.types",
+    }
+
+    if name not in mapping:
+        raise AttributeError(name)
+
+    module = import_module(mapping[name])
+    return getattr(module, name)

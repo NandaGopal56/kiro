@@ -3,7 +3,9 @@
 from .chunkers.schema import Doc
 from .loaders.schema import ParsedDoc
 from .engine import ContextEngine
-from .loaders import AutoLoader, ExtractionResult, PdfMarkdownLoader
+from .loaders import ExtractionResult
+from .loaders.pdf_markdown import PdfMarkdownLoader
+from .loaders.auto import AutoLoader
 
 __all__ = [
     "AutoLoader",
@@ -12,4 +14,4 @@ __all__ = [
     "ExtractionResult",
     "ParsedDoc",
     "PdfMarkdownLoader",
-]
+    ]

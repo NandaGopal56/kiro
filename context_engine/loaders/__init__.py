@@ -1,33 +1,34 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Type
+from importlib import import_module
 
-from .auto import AutoLoader
 from .base import ExtractionResult, Loader
-from .pdf_markdown import PdfMarkdownLoader
 
-REGISTRY: dict[str, type[Loader]] = {
-    "auto": AutoLoader,
-    "pdf": PdfMarkdownLoader,
-    "pdf_markdown": PdfMarkdownLoader,
+
+REGISTRY: dict[str, str] = {
+    "auto": "context_engine.loaders.auto.AutoLoader",
+    "pdf": "context_engine.loaders.pdf_markdown.PdfMarkdownLoader",
+    "pdf_markdown": "context_engine.loaders.pdf_markdown.PdfMarkdownLoader",
 }
+
+
+def _load(path: str) -> Type[Loader]:
+    module_path, cls_name = path.rsplit(".", 1)
+    module = import_module(module_path)
+    return getattr(module, cls_name)
 
 
 def get(name: str, **kwargs: Any) -> Loader:
     try:
-        cls = REGISTRY[name]
+        path = REGISTRY[name]
     except KeyError as exc:
         raise ValueError(
             f"Unknown loader {name!r}. Available: {sorted(REGISTRY)}"
         ) from exc
+
+    cls = _load(path)
     return cls(**kwargs)
 
 
-__all__ = [
-    "AutoLoader",
-    "ExtractionResult",
-    "Loader",
-    "PdfMarkdownLoader",
-    "REGISTRY",
-    "get",
-]
+__all__ = ["ExtractionResult", "Loader", "get"]
