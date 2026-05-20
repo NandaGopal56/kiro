@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import re
+import asyncio
 import sys
 from pathlib import Path
-
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import (
     PdfPipelineOptions,
@@ -13,58 +12,10 @@ from docling.datamodel.pipeline_options import (
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling_core.types.doc.base import ImageRefMode
 from docling_core.types.doc.document import ContentLayer
-from markdowncleaner import CleanerOptions, MarkdownCleaner
 
 from .schema import ParsedDoc
 from .base import ExtractionResult, Loader
-
-
-def clean_rag_markdown(text: str) -> str:
-    """Clean PDF-converted Markdown without removing meaningful sections."""
-
-    options = CleanerOptions()
-    options.fix_encoding_mojibake = True
-    options.normalize_quotation_symbols = True
-    options.contract_empty_lines = True
-    options.crimp_linebreaks = True
-    options.remove_duplicate_headlines = True
-
-    options.remove_short_lines = False
-    options.remove_sections = False
-    options.remove_references_heuristically = False
-    options.remove_footnotes_in_text = False
-
-    cleaner = MarkdownCleaner(options=options)
-    return cleaner.clean_markdown_string(text)
-
-
-def clean_repeated_special_chars(text: str) -> str:
-    """Normalize repeated punctuation noise commonly introduced by PDFs."""
-
-    text = re.sub(r"(\\_){2,}", "______", text)
-    text = re.sub(r"_{3,}", "______", text)
-    text = re.sub(r"([ \t])\1{2,}", r"\1", text)
-
-    replacements = {
-        r"!{2,}": "!",
-        r"@{2,}": "@",
-        r"\${2,}": "$",
-        r"%{2,}": "%",
-        r"\^{2,}": "^",
-        r"&{2,}": "&",
-        r"={2,}": "=",
-        r"\+{2,}": "+",
-        r";{2,}": ";",
-        r":{2,}": ":",
-        r",{2,}": ",",
-        r"\?{2,}": "?",
-        r"/{2,}": "/",
-        r"[\\]{2,}": "\\\\",
-    }
-    for pattern, replacement in replacements.items():
-        text = re.sub(pattern, replacement, text)
-
-    return text
+from .utils import clean_rag_markdown, clean_repeated_special_chars
 
 
 class PdfMarkdownLoader(Loader):
@@ -88,28 +39,26 @@ class PdfMarkdownLoader(Loader):
         document_dir.mkdir(parents=True, exist_ok=True)
 
         markdown_path = document_dir / f"{pdf_path.stem}.md"
-        artifacts_dir = document_dir / f"{pdf_path.stem}_images"
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        artifacts_dir = document_dir / f"{pdf_path.stem}_artifacts"
 
         result = self._build_converter().convert(str(pdf_path), raises_on_error=True)
+
         result.document.save_as_markdown(
             markdown_path,
-            included_content_layers={ContentLayer.BODY, ContentLayer.FURNITURE},
             page_break_placeholder="\n\n---\n\n",
             image_mode=ImageRefMode.REFERENCED,
-            artifacts_dir=artifacts_dir,
+            artifacts_dir=artifacts_dir
         )
 
         markdown_text = markdown_path.read_text(encoding="utf-8")
-        if self.clean:
-            markdown_text = clean_repeated_special_chars(clean_rag_markdown(markdown_text))
-            markdown_path.write_text(markdown_text, encoding="utf-8")
+        # if self.clean:
+        #     markdown_text = clean_repeated_special_chars(clean_rag_markdown(markdown_text))
+        #     markdown_path.write_text(markdown_text, encoding="utf-8")
 
         return ExtractionResult(
             source_path=pdf_path,
             text_path=markdown_path,
             text=markdown_text,
-            artifacts_dir=artifacts_dir,
             metadata={"loader": "pdf_markdown"},
         )
 
@@ -119,7 +68,7 @@ class PdfMarkdownLoader(Loader):
         results: list[ExtractionResult] = []
         for pdf_path in sorted(Path(input_dir).resolve().glob("*.pdf")):
             try:
-                results.append(self.extract(pdf_path))
+                results.append(asyncio.run(self.extract(pdf_path)))
             except Exception as exc:  # noqa: BLE001
                 print(f"Skipped {pdf_path.name}: {exc}", file=sys.stderr)
         return results
@@ -137,7 +86,10 @@ class PdfMarkdownLoader(Loader):
                 mode=TableFormerMode.ACCURATE,
                 do_cell_matching=True,
             ),
+            do_picture_extraction=True,
             do_picture_classification=True,
+            images_scale=2.0,
+            generate_page_images=True,
             generate_picture_images=True,
         )
 
