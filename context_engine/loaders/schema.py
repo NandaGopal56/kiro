@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 @dataclass(slots=True)
 class ParsedDoc:
@@ -24,3 +26,14 @@ class ParsedDoc:
         if include_tables:
             texts.extend(self.tables)
         return texts
+
+
+@dataclass(slots=True)
+class ExtractionResult:
+    """File extraction output, kept with loaders to avoid a second abstraction."""
+
+    source_path: Path
+    text_path: Path
+    text: str
+    artifacts_dir: Path | None = None
+    metadata: dict[str, Any] | None = None

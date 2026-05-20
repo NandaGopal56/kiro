@@ -13,8 +13,8 @@ from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling_core.types.doc.base import ImageRefMode
 from docling_core.types.doc.document import ContentLayer
 
-from .schema import ParsedDoc
-from .base import ExtractionResult, Loader
+from .schema import ParsedDoc, ExtractionResult
+from .base import Loader
 from .utils import clean_rag_markdown, clean_repeated_special_chars
 
 
