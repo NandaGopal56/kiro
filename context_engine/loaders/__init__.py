@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Type
 from importlib import import_module
 
-from .base import ExtractionResult, Loader
+from .base import Loader
 
 
 REGISTRY: dict[str, str] = {
@@ -31,4 +31,4 @@ def get(name: str, **kwargs: Any) -> Loader:
     return cls(**kwargs)
 
 
-__all__ = ["ExtractionResult", "Loader", "get"]
+__all__ = ["Loader", "get"]
