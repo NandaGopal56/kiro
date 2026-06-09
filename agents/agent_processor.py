@@ -1,19 +1,28 @@
 import asyncio
 import logging
-from communication_bus.inmemory_bus import InMemoryBus, bus
-from .communications.receiver import on_human_message
-from .VideoTopicBuffer import VideoTopicBuffer, video_buffer
+
+from communication_bus.inmemory_bus import InMemoryBus, bus as default_bus
+
+from .video_topic_buffer import VideoTopicBuffer, video_buffer
 
 logger = logging.getLogger(__name__)
 
 class AgentProcessor:
     """Service for managing agent lifecycle and message handling."""
 
-    def __init__(self):
-        self.bus: InMemoryBus = bus
-        self.video_buffer: VideoTopicBuffer = video_buffer
+    name = "agents"
+
+    def __init__(
+        self,
+        bus: InMemoryBus | None = None,
+        video_buffer: VideoTopicBuffer | None = None,
+    ):
+        self._owns_bus = bus is None
+        self.bus: InMemoryBus = bus or default_bus
+        self.video_buffer: VideoTopicBuffer = video_buffer or globals()["video_buffer"]
         self._is_running = False
         self._run_task: asyncio.Task | None = None
+        self._human_callback = None
 
     async def start(self, **kwargs) -> None:
         """Start the agent service asynchronously."""
@@ -22,9 +31,18 @@ class AgentProcessor:
             return
 
         try:
+            from .communications.receiver import on_human_message
+
             logger.info("Starting Agent Service...")
             await self.bus.connect()
-            self.bus.subscribe("voice/commands", on_human_message)
+            self._human_callback = (
+                lambda topic, payload: on_human_message(
+                    topic,
+                    payload,
+                    response_bus=self.bus,
+                )
+            )
+            self.bus.subscribe("voice/commands", self._human_callback)
             self.bus.subscribe("camera/front", self.video_buffer.on_frame)
 
             self._is_running = True
@@ -33,7 +51,8 @@ class AgentProcessor:
         except Exception as e:
             logger.error(f"Failed to start agent service: {e}", exc_info=True)
             self._is_running = False
-            await self.bus.disconnect()
+            if self._owns_bus:
+                await self.bus.disconnect()
             raise
 
     async def stop(self) -> None:
@@ -43,6 +62,10 @@ class AgentProcessor:
 
         logger.info("Stopping Agent Service...")
         self._is_running = False
+        if self._human_callback is not None:
+            self.bus.unsubscribe("voice/commands", self._human_callback)
+            self._human_callback = None
+        self.bus.unsubscribe("camera/front", self.video_buffer.on_frame)
 
         if self._run_task:
             self._run_task.cancel()
@@ -51,5 +74,13 @@ class AgentProcessor:
             except asyncio.CancelledError:
                 pass
 
-        await self.bus.disconnect()
+        if self._owns_bus:
+            await self.bus.disconnect()
         logger.info("Agent Service stopped")
+
+
+def create_service(
+    bus: InMemoryBus | None = None,
+    video_buffer: VideoTopicBuffer | None = None,
+) -> AgentProcessor:
+    return AgentProcessor(bus=bus, video_buffer=video_buffer)

@@ -1,12 +1,21 @@
-
 import asyncio
 from typing import AsyncGenerator
+
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
+
 from .graph import build_workflow
 
 load_dotenv()
-workflow = build_workflow()
+_workflow = None
+
+
+def get_workflow():
+    """Build the LangGraph workflow lazily to keep package imports lightweight."""
+    global _workflow
+    if _workflow is None:
+        _workflow = build_workflow()
+    return _workflow
 
 
 class TokenStreamProcessor:
@@ -48,7 +57,7 @@ async def invoke_conversation(
     """
     processor = TokenStreamProcessor()
 
-    async for mode, data in workflow.astream(
+    async for mode, data in get_workflow().astream(
         {"messages": [HumanMessage(content=message)]},
         {"configurable": {"thread_id": thread_id}},
         stream_mode=["messages"],

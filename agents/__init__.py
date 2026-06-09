@@ -1,0 +1,17 @@
+"""Agents package."""
+
+__all__ = ["AgentProcessor", "create_service", "invoke_conversation"]
+
+
+def __getattr__(name: str):
+    if name in {"AgentProcessor", "create_service"}:
+        from .agent_processor import AgentProcessor, create_service
+
+        return {"AgentProcessor": AgentProcessor, "create_service": create_service}[name]
+
+    if name == "invoke_conversation":
+        from .bot import invoke_conversation
+
+        return invoke_conversation
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -16,8 +16,8 @@ from .nodes import (
     tool_node_processor,
     video_capture,
     path_selector_post_llm_call,
-    fanout_selector, 
-    join_after_tools 
+    fanout_selector,
+    join_after_tools,
 )
 
 def build_workflow() -> StateGraph:

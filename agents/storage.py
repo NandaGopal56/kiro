@@ -2,14 +2,20 @@ import aiosqlite
 import json
 import asyncio
 from datetime import datetime
+from pathlib import Path
 
-DB_PATH = "bot_data_v2.db"
+DB_PATH = Path(".storages") / "bot_data_v2.db"
+
+
+def _database_path() -> str:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    return str(DB_PATH)
 
 # -------------------------------------------------------------
 #  DATABASE INIT
 # -------------------------------------------------------------
 async def init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_database_path()) as db:
         await db.execute("PRAGMA foreign_keys = ON;")
         
         await db.executescript("""
@@ -58,7 +64,7 @@ async def _get_next_sequence(db, thread_id: int) -> int:
 #  THREAD OPERATIONS
 # -------------------------------------------------------------
 async def create_thread(title: str = "New Chat") -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_database_path()) as db:
         cur = await db.execute("INSERT INTO threads (title) VALUES (?)", (title,))
         await db.commit()
         return cur.lastrowid
@@ -71,7 +77,7 @@ async def add_message(thread_id: int, role: str, content: str = None) -> int:
     Adds a text message. If this message also triggers tools, 
     use the returned ID with `add_tool_call`.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_database_path()) as db:
         seq = await _get_next_sequence(db, thread_id)
         cur = await db.execute("""
             INSERT INTO messages (thread_id, role, content, sequence)
@@ -88,7 +94,7 @@ async def add_tool_call(message_id: int, tool_input_json: dict, call_id: str = N
     Registers that the AI wants to call a tool. 
     call_id is optional but recommended if using OpenAI (they return unique IDs).
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_database_path()) as db:
         cur = await db.execute("""
             INSERT INTO ai_tool_calls (message_id, call_id, tool_input_json)
             VALUES (?, ?, ?)
@@ -100,7 +106,7 @@ async def update_tool_result(message_id: int, call_id: str, tool_output: dict):
     """
     Updates the existing tool call row with the result.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_database_path()) as db:
         await db.execute("""
             UPDATE ai_tool_calls 
             SET tool_output = ? 
@@ -116,7 +122,7 @@ async def get_full_thread(thread_id: int):
     Reconstructs the conversation.
     It fetches messages, then attaches any associated tool inputs/outputs.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(_database_path()) as db:
         db.row_factory = aiosqlite.Row  # Allows accessing columns by name
 
         # 1. Get all messages with any joined tool calls
