@@ -18,3 +18,5 @@ chroma_store
 *data
 *cache
 .DS_Store
+.storages
+.stages/
