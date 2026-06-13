@@ -8,7 +8,7 @@ import logging
 import asyncio
 from typing import Any
 
-from ...bot import invoke_conversation
+from ...client import gateway
 
 logger = logging.getLogger(__name__)
 
@@ -28,14 +28,16 @@ async def _drain_conversation(
     response_bus=None,
 ) -> None:
     """Run the streaming conversation generator from a background task."""
-    chunks = []
-    async for chunk in invoke_conversation(message, thread_id=thread_id):
-        chunks.append(chunk)
+    response_text = await gateway.invoke(
+        agent_name="supervisor",
+        task=message,
+        thread_id=str(thread_id),
+    )
 
-    if response_bus is not None and chunks:
+    if response_bus is not None and response_text:
         await response_bus.publish(
             "voice/commands/llm_response",
-            {"text": "".join(chunks)},
+            {"text": response_text},
         )
 
 

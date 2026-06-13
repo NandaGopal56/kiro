@@ -48,6 +48,14 @@ async def clarify_goal(state: ResearchState, config: RunnableConfig) -> Dict[str
     clarification = state.get("user_clarification", "")
     prev_goal    = state.get("goal", "")
 
+    if not original:
+        messages = list(state.get("messages", []))
+        from langchain_core.messages import HumanMessage as HM
+        for msg in reversed(messages):
+            if isinstance(msg, HM):
+                original = msg.content if isinstance(msg.content, str) else str(msg.content)
+                break
+
     llm = get_llm(strong=True)
 
     # ── First pass: refine and ask questions ──────────────────────────────

@@ -27,7 +27,7 @@ class AgentInfo:
 class BaseAgent(abc.ABC):
     """
     Every agent subclasses this and implements three methods.
-    The supervisor only ever calls .info, .run(), and .stream().
+    The supervisor only ever calls .info, .invoke(), and .stream().
     """
 
     @property
@@ -37,7 +37,7 @@ class BaseAgent(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def run(
+    async def invoke(
         self,
         task: str,
         thread_id: str,
@@ -49,6 +49,23 @@ class BaseAgent(abc.ABC):
         Use this for standard request/response interactions.
         """
         ...
+
+    async def run(
+        self,
+        task: str,
+        thread_id: str,
+        context: Optional[Dict[str, Any]] = None,
+        config: Optional[RunnableConfig] = None,
+    ) -> str:
+        """
+        Backward-compatible alias for invoke().
+        """
+        return await self.invoke(
+            task=task,
+            thread_id=thread_id,
+            context=context,
+            config=config,
+        )
 
     @abc.abstractmethod
     async def stream(

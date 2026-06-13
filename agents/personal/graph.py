@@ -131,7 +131,7 @@ class PersonalAgent(BaseAgent):
             self._graph = build_personal_graph()
         return self._graph
 
-    async def run(
+    async def invoke(
         self,
         task: str,
         thread_id: str,

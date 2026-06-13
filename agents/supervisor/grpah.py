@@ -5,7 +5,7 @@
 # Flow:
 #   START
 #     → route_request    (which agent should handle this?)
-#         → delegate     (hand off to the chosen agent, return answer)
+#         → personal | deep_research  (subgraph nodes)
 #         → ask_user     (ask for clarification if needed)
 #     → END
 #
@@ -22,26 +22,22 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import RunnableConfig
 
-from agents.base import BaseAgent
+from agents.base import AgentInfo, BaseAgent
 
-from .nodes import (
-    ask_user,
-    delegate,
-    route_request,
-    set_agent_registry,
-    what_to_do,
-)
+from .nodes import ask_user, make_route_request, what_to_do
 from .state import SupervisorState
 
 
-def build_supervisor_graph():
+def build_supervisor_graph(agents: Dict[str, BaseAgent]):
     """Build and compile the supervisor's LangGraph."""
     g = StateGraph(SupervisorState)
 
     # -- Nodes ----------------------------------------------------------------
-    g.add_node("route_request", route_request)
-    g.add_node("delegate",      delegate)
+    g.add_node("route_request", make_route_request(agents))
     g.add_node("ask_user",      ask_user)
+
+    for agent_id, agent in agents.items():
+        g.add_node(agent_id, agent.graph)
 
     # -- Edges ----------------------------------------------------------------
     g.add_edge(START, "route_request")
@@ -49,14 +45,12 @@ def build_supervisor_graph():
     g.add_conditional_edges(
         "route_request",
         what_to_do,
-        path_map={
-            "delegate": "delegate",
-            "ask_user": "ask_user",
-        },
+        path_map={"ask_user": "ask_user", **{agent_id: agent_id for agent_id in agents}},
     )
 
-    g.add_edge("delegate", END)
     g.add_edge("ask_user", END)
+    for agent_id in agents:
+        g.add_edge(agent_id, END)
 
     graph = g.compile(checkpointer=MemorySaver())
     return graph
@@ -66,7 +60,7 @@ def build_supervisor_graph():
 # Supervisor — the public-facing class main.py instantiates
 # ---------------------------------------------------------------------------
 
-class Supervisor:
+class Supervisor(BaseAgent):
     """
     Top-level entry point.
 
@@ -81,35 +75,60 @@ class Supervisor:
     """
 
     def __init__(self, agents: Dict[str, BaseAgent]):
-        # Push the agent registry into the nodes module
-        set_agent_registry(agents)
         self.agents = agents
-        self._graph = build_supervisor_graph()
+        self._graph = build_supervisor_graph(agents)
 
-    async def run(
+    @property
+    def info(self) -> AgentInfo:
+        return AgentInfo(
+            agent_id="supervisor",
+            name="Supervisor",
+            description=(
+                "Routes requests across registered agents and can act as a "
+                "single entry point for multi-agent execution."
+            ),
+            can_handle_long_tasks=True,
+        )
+
+    @property
+    def graph(self):
+        return self._graph
+
+    def _extract_response(self, result: Dict[str, Any]) -> str:
+        messages = list(result.get("messages", []))
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage) and msg.content:
+                return msg.content if isinstance(msg.content, str) else str(msg.content)
+        return result.get("response", "")
+
+    async def invoke(
         self,
-        user_input: str,
+        task: str,
         thread_id: str = "default",
+        context: Optional[Dict[str, Any]] = None,
+        config: Optional[RunnableConfig] = None,
     ) -> str:
         """
         Handle a user message end-to-end.
         Returns the final response as a plain string.
         """
-        config = RunnableConfig(configurable={"thread_id": thread_id})
+        cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
 
         initial_state = SupervisorState(
-            messages=[HumanMessage(content=user_input)],
+            messages=[HumanMessage(content=task)],
             thread_id=thread_id,
-            user_input=user_input,
+            user_input=task,
         )
 
-        result = await self._graph.ainvoke(initial_state, config=config)
-        return result.get("response", "")
+        result = await self._graph.ainvoke(initial_state, config=cfg)
+        return self._extract_response(result)
 
     async def stream(
         self,
-        user_input: str,
+        task: str,
         thread_id: str = "default",
+        context: Optional[Dict[str, Any]] = None,
+        config: Optional[RunnableConfig] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Stream the supervisor's progress node by node.
@@ -118,16 +137,16 @@ class Supervisor:
         Useful for showing the user "Routing your request..." then
         live updates from the chosen agent.
         """
-        config = RunnableConfig(configurable={"thread_id": thread_id})
+        cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
 
         initial_state = SupervisorState(
-            messages=[HumanMessage(content=user_input)],
+            messages=[HumanMessage(content=task)],
             thread_id=thread_id,
-            user_input=user_input,
+            user_input=task,
         )
 
         async for update in self._graph.astream(
-            initial_state, config=config, stream_mode="updates"
+            initial_state, config=cfg, stream_mode="updates"
         ):
             for node_name, node_update in update.items():
                 yield {"node": node_name, "update": node_update}
