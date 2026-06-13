@@ -18,13 +18,13 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langgraph.prebuilt import ToolNode
 from langgraph.types import RunnableConfig
 
-from ..storage import (
+from ...shared.storage import (
     update_tool_result,
     add_tool_call,
     add_message,
     get_full_thread
 )
-from ..tools.basic_tools import basic_tools
+from ...tools.basic_tools import basic_tools
 from ..video_topic_buffer import video_buffer
 from .prompts import (
     ASSISTANT_SYSTEM_PROMPT,

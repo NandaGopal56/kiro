@@ -9,7 +9,6 @@ async def _run_message(message: str, thread_id: int) -> None:
 
     async for token in invoke_conversation(message, thread_id=thread_id):
         print(token, end="", flush=True)
-    print()
 
 
 def main() -> None:

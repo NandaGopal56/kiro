@@ -5,7 +5,7 @@ __all__ = ["AgentProcessor", "create_service", "invoke_conversation"]
 
 def __getattr__(name: str):
     if name in {"AgentProcessor", "create_service"}:
-        from .agent_processor import AgentProcessor, create_service
+        from .legacy.agent_processor import AgentProcessor, create_service
 
         return {"AgentProcessor": AgentProcessor, "create_service": create_service}[name]
 

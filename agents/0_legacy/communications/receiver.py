@@ -8,7 +8,7 @@ import logging
 import asyncio
 from typing import Any
 
-from ..bot import invoke_conversation
+from ...bot import invoke_conversation
 
 logger = logging.getLogger(__name__)
 
