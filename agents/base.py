@@ -50,23 +50,6 @@ class BaseAgent(abc.ABC):
         """
         ...
 
-    async def run(
-        self,
-        task: str,
-        thread_id: str,
-        context: Optional[Dict[str, Any]] = None,
-        config: Optional[RunnableConfig] = None,
-    ) -> str:
-        """
-        Backward-compatible alias for invoke().
-        """
-        return await self.invoke(
-            task=task,
-            thread_id=thread_id,
-            context=context,
-            config=config,
-        )
-
     @abc.abstractmethod
     async def stream(
         self,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from .schema import ParsedDoc
+from .schema import ExtractionResult, ParsedDoc
 
 
 class Loader(ABC):
@@ -10,3 +10,6 @@ class Loader(ABC):
     @abstractmethod
     async def load(self, source: str) -> ParsedDoc:
         ...
+
+
+__all__ = ["ExtractionResult", "Loader", "ParsedDoc"]

@@ -52,6 +52,7 @@ not fire spuriously before the user has started speaking.
 """
 
 import asyncio
+from collections.abc import Callable
 import json
 from datetime import datetime, timedelta
 
@@ -84,10 +85,17 @@ def _rms(chunk: bytes) -> float:
 
 class VoiceProcessor:
 
-    def __init__(self):
-        self.provider      = SarvamTranscriptionProvider()
-        self.audio_handler = audio_handler
-        self.wake_word     = WakeWordDetector()
+    def __init__(
+        self,
+        provider=None,
+        audio_handler=None,
+        wake_word=None,
+        on_utterance: Callable[[str], None] | None = None,
+    ):
+        self.provider      = provider or SarvamTranscriptionProvider()
+        self.audio_handler = audio_handler or globals()["audio_handler"]
+        self.wake_word     = wake_word or WakeWordDetector()
+        self.on_utterance  = on_utterance
         self._is_running   = False
 
     async def run(self):
@@ -347,3 +355,5 @@ class VoiceProcessor:
         print("\n" + "=" * 55)
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         print("=" * 55 + "\n")
+        if self.on_utterance is not None:
+            self.on_utterance(utterance)

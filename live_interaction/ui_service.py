@@ -1,17 +1,34 @@
 import asyncio
+from collections.abc import Callable
+from pathlib import Path
+
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
-from communication_bus.inmemory_bus import bus
-from agents.bot import invoke_conversation
+
+from communication_bus.inmemory_bus import bus as default_bus
+
 from .logger import logger
-from pathlib import Path
 
 
 class UIService:
-    def __init__(self):
+    name = "live_interaction"
+
+    def __init__(
+        self,
+        bus=None,
+        agent_client: Callable | None = None,
+        host: str = "localhost",
+        port: int = 8000,
+    ):
         self.app = FastAPI()
-        self.bus = bus
+        self._owns_bus = bus is None
+        self.bus = bus or default_bus
+        self.agent_client = agent_client or _default_agent_client
+        self.host = host
+        self.port = port
         self._is_running = False
+        self._server = None
+        self._server_task: asyncio.Task | None = None
 
         self.app.get("/")(self.index)
         self.app.websocket("/ws/camera")(self.camera_ws)
@@ -52,11 +69,9 @@ class UIService:
         if not message:
             return JSONResponse({"error": "message is required"}, status_code=400)
 
-        from agents.bot import invoke_conversation
-
         async def event_gen():
             try:
-                async for part in invoke_conversation(message, thread_id=thread_id):
+                async for part in self.agent_client(message, thread_id=thread_id):
                     if part:
                         yield f"data: {part}\n\n"
                 yield "event: done\ndata: [DONE]\n\n"
@@ -80,17 +95,47 @@ class UIService:
 
         import uvicorn
         self._server = uvicorn.Server(
-            uvicorn.Config(self.app, host="localhost", port=8000, log_level="info")
+            uvicorn.Config(self.app, host=self.host, port=self.port, log_level="info")
         )
 
-        asyncio.create_task(self._server.serve())
-        logger.info("UI Service running at http://localhost:8000")
+        self._server_task = asyncio.create_task(self._server.serve())
+        logger.info(f"UI Service running at http://{self.host}:{self.port}")
 
     async def stop(self):
         if not self._is_running:
             return
         self._is_running = False
-        await self.bus.disconnect()
+        if self._server is not None:
+            self._server.should_exit = True
+        if self._server_task is not None:
+            try:
+                await asyncio.wait_for(self._server_task, timeout=3)
+            except asyncio.TimeoutError:
+                self._server_task.cancel()
+            self._server_task = None
+        if self._owns_bus:
+            await self.bus.disconnect()
+
+
+async def _default_agent_client(message: str, thread_id: int = 1):
+    from agents.bot import invoke_conversation
+
+    async for part in invoke_conversation(message, thread_id=thread_id):
+        yield part
+
+
+def create_service(
+    bus=None,
+    agent_client: Callable | None = None,
+    host: str = "localhost",
+    port: int = 8000,
+) -> UIService:
+    return UIService(
+        bus=bus,
+        agent_client=agent_client,
+        host=host,
+        port=port,
+    )
 
 
 async def main():

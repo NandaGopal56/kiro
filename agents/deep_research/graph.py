@@ -1,18 +1,3 @@
-# agents/deep_research/graph.py
-#
-# Full flow:
-#
-#   START
-#     → clarify_goal          ← graph PAUSES here, waits for user reply
-#     → check_confirmation    ← resumes here after user replies
-#         ↓ "confirmed"           ↓ "needs update"
-#     → create_plan         clarify_goal  (loop until confirmed)
-#     → execute_step ←──────────────────┐
-#     → reflect                         │ (not done)
-#         ↓ (done)                      │
-#     → finish ──────────────────────────
-#     → END
-
 from __future__ import annotations
 
 from typing import Any, AsyncIterator, Dict, Optional

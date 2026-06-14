@@ -1,18 +1,3 @@
-# agents/personal/graph.py
-#
-# Wires the personal agent's nodes into a LangGraph.
-# The flow mirrors the original build_workflow() exactly.
-#
-#   load_history
-#       → decide_steps
-#           → [grab_video_frame | fetch_web_context | fetch_doc_context]  (parallel)
-#           → join_context  (wait for all parallel branches)
-#           → call_llm
-#       → call_llm  (direct path when no context steps needed)
-#           → run_tools → call_llm  (loop until no more tool calls)
-#           → compress_history → done
-#           → done
-
 from __future__ import annotations
 
 from typing import Any, AsyncIterator, Dict, Optional

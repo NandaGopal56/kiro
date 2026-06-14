@@ -1,7 +1,7 @@
 CLARIFIER_PROMPT = """You are a research intake assistant.
 
 Your job: given the user's research question, do two things:
-1. Identify 1–3 specific things that, if clarified, would make the research much better.
+1. Identify 1-3 specific things that, if clarified, would make the research much better.
    (Skip this if the question is already specific enough — don't ask for the sake of it.)
 2. Rewrite the question as a sharp, specific research goal.
 
@@ -146,14 +146,16 @@ Reply with JSON only:
 # Finisher — synthesises all findings into the final answer
 # ---------------------------------------------------------------------------
 
-FINISHER_PROMPT = """You are a research writer.
+FINISHER_PROMPT = """
+  You are a research writer.
+  
+  Research goal: {goal}
 
-Research goal: {goal}
+  All findings gathered during research:
+  {findings}
 
-All findings gathered during research:
-{findings}
-
-Write a comprehensive, well-structured answer to the research goal.
-- Use clear headings where appropriate.
-- Be factual and precise — do not add information not in the findings.
-- End with a brief conclusion."""
+  Write a comprehensive, well-structured answer to the research goal.
+  - Use clear headings where appropriate.
+  - Be factual and precise — do not add information not in the findings.
+  - End with a brief conclusion.
+"""

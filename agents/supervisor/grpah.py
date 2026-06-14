@@ -1,18 +1,3 @@
-# agents/supervisor/graph.py
-#
-# The supervisor graph — the single entry point for all user requests.
-#
-# Flow:
-#   START
-#     → route_request    (which agent should handle this?)
-#         → personal | deep_research  (subgraph nodes)
-#         → ask_user     (ask for clarification if needed)
-#     → END
-#
-# Usage:
-#   supervisor = Supervisor(agents={"personal": PersonalAgent(), ...})
-#   answer = await supervisor.run("What is the capital of France?", thread_id="t1")
-
 from __future__ import annotations
 
 from typing import Any, AsyncIterator, Dict, Optional
@@ -150,7 +135,3 @@ class Supervisor(BaseAgent):
         ):
             for node_name, node_update in update.items():
                 yield {"node": node_name, "update": node_update}
-
-    def registered_agents(self) -> Dict[str, str]:
-        """Return {agent_id: agent_name} — useful for health checks / admin UIs."""
-        return {aid: a.info.name for aid, a in self.agents.items()}
