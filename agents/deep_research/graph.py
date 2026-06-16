@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Any, AsyncIterator, Dict, Optional
 
 from langchain_core.messages import HumanMessage
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import RunnableConfig
 
 from agents.base import AgentInfo, BaseAgent
+from agents.shared.checkpointer import get_checkpointer, load_previous_state, merge_with_new_messages
 
 from .nodes import (
     check_confirmation,
@@ -16,6 +16,7 @@ from .nodes import (
     create_plan,
     execute_step,
     finish,
+    load_history,
     reflect,
     should_continue,
 )
@@ -26,6 +27,7 @@ def build_research_graph():
     g = StateGraph(ResearchState)
 
     # -- Nodes ----------------------------------------------------------------
+    g.add_node("load_history",        load_history)
     g.add_node("clarify_goal",        clarify_goal)
     g.add_node("check_confirmation",  check_confirmation)
     g.add_node("create_plan",         create_plan)
@@ -34,7 +36,8 @@ def build_research_graph():
     g.add_node("finish",              finish)
 
     # -- Edges ----------------------------------------------------------------
-    g.add_edge(START, "clarify_goal")
+    g.add_edge(START, "load_history")
+    g.add_edge("load_history", "clarify_goal")
 
     # clarify_goal → check_confirmation (after graph resumes from interrupt)
     g.add_edge("clarify_goal", "check_confirmation")
@@ -65,7 +68,9 @@ def build_research_graph():
 
     # Pause after clarify_goal so the user can reply
     # The supervisor feeds the user's reply back in and calls .ainvoke(None) to resume
-    graph = g.compile(checkpointer=MemorySaver(), interrupt_after=["clarify_goal"])
+    # Use persistent SQLite checkpointer instead of in-memory
+    checkpointer = get_checkpointer("deep_research")
+    graph = g.compile(checkpointer=checkpointer, interrupt_after=["clarify_goal"])
     return graph
 
 
@@ -115,20 +120,26 @@ class DeepResearchAgent(BaseAgent):
         config: Optional[RunnableConfig] = None,
     ) -> str:
         """
-        Start or continue a research session.
+        Start or continue a research session with persistent state restoration.
 
         First call:   task = the user's research question
                       → graph runs clarify_goal, pauses, returns clarification message
         Second call+: task = the user's reply (confirmation or corrections)
-                      → graph resumes, processes reply, either loops or proceeds to research
+                      → graph resumes from checkpoint, processes reply, either loops or proceeds to research
+        
+        The state is restored from SQLite checkpoint before execution, ensuring
+        all prior context for this thread_id is available to the agent.
         """
         cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
 
-        # Check if a session already exists for this thread
-        existing = await self.graph.aget_state(cfg)
-        session_exists = existing and existing.values
+        from agents.shared.memory import save_message_idempotent
+        await save_message_idempotent(thread_id, "user", task)
 
-        if not session_exists:
+        # Load previous checkpoint for this thread_id
+        previous_state = await load_previous_state(self.graph, thread_id, "deep_research")
+
+        # Check if a session already exists for this thread
+        if previous_state is None:
             # First call — start a new session
             initial_state = ResearchState(
                 messages=[HumanMessage(content=task)],
@@ -138,11 +149,12 @@ class DeepResearchAgent(BaseAgent):
             )
             result = await self.graph.ainvoke(initial_state, config=cfg)
         else:
-            # Subsequent call — inject the user's reply and resume
-            await self.graph.aupdate_state(
-                cfg,
-                {"messages": [HumanMessage(content=task)]},
-            )
+            # Subsequent call — merge new message with previous checkpoint state
+            new_state_values = {
+                "messages": [HumanMessage(content=task)],
+                "thread_id": thread_id,
+            }
+            merged_state = merge_with_new_messages(previous_state, new_state_values)
             result = await self.graph.ainvoke(None, config=cfg)
 
         # Return the last AI message as the response
@@ -163,13 +175,18 @@ class DeepResearchAgent(BaseAgent):
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Stream all node updates, including clarification and research steps.
+        State is restored from SQLite checkpoint before execution.
         """
         cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
 
-        existing = await self.graph.aget_state(cfg)
-        session_exists = existing and existing.values
+        from agents.shared.memory import save_message_idempotent
+        await save_message_idempotent(thread_id, "user", task)
 
-        if not session_exists:
+        # Load previous checkpoint for this thread_id
+        previous_state = await load_previous_state(self.graph, thread_id, "deep_research")
+
+        if previous_state is None:
+            # First call — start a new session
             initial_state = ResearchState(
                 messages=[HumanMessage(content=task)],
                 thread_id=thread_id,
@@ -182,10 +199,12 @@ class DeepResearchAgent(BaseAgent):
                 for node_name, node_update in update.items():
                     yield {"node": node_name, "update": node_update}
         else:
-            await self.graph.aupdate_state(
-                cfg,
-                {"messages": [HumanMessage(content=task)]},
-            )
+            # Subsequent call — merge new message with previous checkpoint state
+            new_state_values = {
+                "messages": [HumanMessage(content=task)],
+                "thread_id": thread_id,
+            }
+            merged_state = merge_with_new_messages(previous_state, new_state_values)
             async for update in self.graph.astream(
                 None, config=cfg, stream_mode="updates"
             ):

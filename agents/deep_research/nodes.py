@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, RemoveMessage
 from langgraph.prebuilt import ToolNode
 from langgraph.types import RunnableConfig
 
+from agents.shared.memory import save_message_idempotent, rebuild_messages_from_db
 from agents.shared.models import get_llm
 from agents.shared.tools import research_tools
 
@@ -29,21 +30,39 @@ _llm_with_tools  = get_llm(strong=True).bind_tools(research_tools)
 
 
 # ---------------------------------------------------------------------------
+# Node 0 — load_history
+# Save the incoming user message and reconstruct the thread's history.
+# This keeps the research graph aware of prior turns for the same thread.
+# ---------------------------------------------------------------------------
+
+async def load_history(state: ResearchState, config: RunnableConfig) -> Dict[str, Any]:
+    thread_id = config.get("configurable", {}).get("thread_id", "") or state.get("thread_id", "")
+    messages = list(state.get("messages", []))
+
+    last_user_msg = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
+    if last_user_msg:
+        text = last_user_msg.content if isinstance(last_user_msg.content, str) else str(last_user_msg.content)
+        await save_message_idempotent(thread_id, "user", text)
+
+    loaded_messages = await rebuild_messages_from_db(thread_id)
+    all_messages = [RemoveMessage(id=m.id) for m in messages if m.id] + loaded_messages
+
+    print(all_messages)
+
+    return {
+        "thread_id": thread_id,
+        "messages":  all_messages,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Node 1 — clarify_goal
 # Sharpens the question and asks any needed clarifying questions.
 # The graph PAUSES after this node (interrupt_after) waiting for user reply.
 # ---------------------------------------------------------------------------
 
 async def clarify_goal(state: ResearchState, config: RunnableConfig) -> Dict[str, Any]:
-    """
-    Two jobs:
-    1. First call: refine the raw question + ask clarifying questions.
-    2. Subsequent calls (after user replied): incorporate their feedback.
-
-    The graph pauses after this node so the user can reply.
-    When the user replies, the supervisor feeds their message back in and
-    the graph resumes at check_confirmation.
-    """
+    print(f"DEBUG: clarify_goal called with original={state.get('original_question')}, goal={state.get('goal')}, messages_len={len(state.get('messages', []))}")
     original     = state.get("original_question", "")
     clarification = state.get("user_clarification", "")
     prev_goal    = state.get("goal", "")
@@ -57,6 +76,8 @@ async def clarify_goal(state: ResearchState, config: RunnableConfig) -> Dict[str
                 break
 
     llm = get_llm(strong=True)
+
+    thread_id = config.get("configurable", {}).get("thread_id", "") or state.get("thread_id", "")
 
     # ── First pass: refine and ask questions ──────────────────────────────
     if not prev_goal:
@@ -88,6 +109,8 @@ async def clarify_goal(state: ResearchState, config: RunnableConfig) -> Dict[str
                 refined_goal=refined_goal,
             )
 
+        await save_message_idempotent(thread_id, "assistant", message)
+
         return {
             "goal":                 refined_goal,
             "clarifying_questions": questions,
@@ -112,6 +135,7 @@ async def clarify_goal(state: ResearchState, config: RunnableConfig) -> Dict[str
             original_question=original,
             refined_goal=updated_goal,
         )
+        await save_message_idempotent(thread_id, "assistant", message)
         return {
             "goal":             updated_goal,
             "goal_confirmed":   False,
@@ -124,6 +148,7 @@ async def clarify_goal(state: ResearchState, config: RunnableConfig) -> Dict[str
         original_question=original,
         refined_goal=prev_goal,
     )
+    await save_message_idempotent(thread_id, "assistant", message)
     return {
         "goal_confirmed": False,
         "messages":       [AIMessage(content=message)],
@@ -137,17 +162,16 @@ async def clarify_goal(state: ResearchState, config: RunnableConfig) -> Dict[str
 # ---------------------------------------------------------------------------
 
 async def check_confirmation(state: ResearchState, config: RunnableConfig) -> Dict[str, Any]:
-    """
-    Read the latest user message.
-    - If it's a confirmation ("yes", "confirmed", "ok", "looks good", etc.) → set goal_confirmed = True
-    - Otherwise → treat it as clarification feedback, store it, loop back to clarify_goal
-    """
-    from langchain_core.messages import HumanMessage as HM
-    messages = list(state.get("messages", []))
-
-    # Find the most recent human message (the user's reply)
+    thread_id = config.get("configurable", {}).get("thread_id", "") or state.get("thread_id", "")
+    print(f"DEBUG: check_confirmation called for thread_id={thread_id}")
+    
+    # Load and reconstruct history from DB to get the latest user message
+    loaded_messages = await rebuild_messages_from_db(thread_id)
+    print(f"DEBUG: check_confirmation loaded messages from DB count={len(loaded_messages)}")
+    
     user_reply = ""
-    for msg in reversed(messages):
+    from langchain_core.messages import HumanMessage as HM
+    for msg in reversed(loaded_messages):
         if isinstance(msg, HM):
             user_reply = msg.content if isinstance(msg.content, str) else str(msg.content)
             break
@@ -157,12 +181,25 @@ async def check_confirmation(state: ResearchState, config: RunnableConfig) -> Di
                      "good", "correct", "proceed", "start", "go", "yep", "sure",
                      "perfect", "great", "fine", "approved", "approve"}
     is_confirmed = any(w in user_reply.lower() for w in confirm_words)
+    print(f"DEBUG: check_confirmation user_reply='{user_reply}', is_confirmed={is_confirmed}")
+
+    # Rebuild messages list: replace current messages in state with the db ones
+    messages = list(state.get("messages", []))
+    all_messages = [RemoveMessage(id=m.id) for m in messages if m.id] + loaded_messages
 
     if is_confirmed:
-        return {"goal_confirmed": True, "user_clarification": ""}
+        return {
+            "goal_confirmed": True,
+            "user_clarification": "",
+            "messages": all_messages,
+        }
     else:
         # Treat their reply as clarification/corrections
-        return {"goal_confirmed": False, "user_clarification": user_reply}
+        return {
+            "goal_confirmed": False,
+            "user_clarification": user_reply,
+            "messages": all_messages,
+        }
 
 
 # Router after check_confirmation
@@ -193,6 +230,9 @@ async def create_plan(state: ResearchState, config: RunnableConfig) -> Dict[str,
         + plan.step_list()
         + f"\n\n✅ Done when: {plan.done_when}\n\n_Starting research now..._"
     )
+
+    thread_id = config.get("configurable", {}).get("thread_id", "") or state.get("thread_id", "")
+    await save_message_idempotent(thread_id, "assistant", plan_text)
 
     return {
         "plan":         plan.steps,
@@ -319,6 +359,10 @@ async def finish(state: ResearchState, config: RunnableConfig) -> Dict[str, Any]
         SystemMessage(content=FINISHER_PROMPT.format(goal=goal, findings=findings)),
         HumanMessage(content="Write the final research answer now."),
     ])
+
+    thread_id = config.get("configurable", {}).get("thread_id", "") or state.get("thread_id", "")
+    content = response.content if isinstance(response.content, str) else str(response.content)
+    await save_message_idempotent(thread_id, "assistant", content)
 
     return {
         "final_answer": response.content,

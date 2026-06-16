@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, RemoveMessage
 from langgraph.types import RunnableConfig
+
+from agents.shared.memory import save_message_idempotent, rebuild_messages_from_db
 
 from agents.base import BaseAgent
 from agents.shared.models import get_classifier_llm
@@ -29,14 +31,21 @@ def make_route_request(agents: Dict[str, BaseAgent]):
 
     async def route_request(state: SupervisorState, config: RunnableConfig) -> Dict[str, Any]:
         user_input = state.get("user_input", "")
+        thread_id = config.get("configurable", {}).get("thread_id", "") or state.get("thread_id", "")
+
+        # Save user message to database
+        await save_message_idempotent(thread_id, "user", user_input)
+
+        # Load history to provide routing context
+        loaded_messages = await rebuild_messages_from_db(thread_id)
 
         prompt = ROUTER_PROMPT.format(agent_list=_agent_list_for_prompt())
 
         llm = get_classifier_llm()
-        response = await llm.ainvoke([
-            SystemMessage(content=prompt),
-            HumanMessage(content=user_input),
-        ])
+        llm_messages = [SystemMessage(content=prompt)]
+        llm_messages.extend(loaded_messages[-10:])  # Give the classifier context of the last few turns
+
+        response = await llm.ainvoke(llm_messages)
 
         try:
             raw = response.content.strip()
@@ -60,19 +69,26 @@ def make_route_request(agents: Dict[str, BaseAgent]):
             chosen = "personal"
             data["reason"] += f" (unknown agent '{unknown}' requested - fell back to personal)"
 
+        messages = list(state.get("messages", []))
+        all_messages = [RemoveMessage(id=m.id) for m in messages if m.id] + loaded_messages
+
         return {
             "chosen_agent": chosen,
             "routing_reason": data.get("reason", ""),
             "needs_clarification": data.get("needs_clarification", False),
             "clarification_question": data.get("clarification_question", ""),
+            "messages": all_messages,
         }
 
     return route_request
 
 
 async def ask_user(state: SupervisorState, config: RunnableConfig) -> Dict[str, Any]:
+    thread_id = config.get("configurable", {}).get("thread_id", "") or state.get("thread_id", "")
     question = state.get("clarification_question", "Could you give me more details?")
     message = CLARIFICATION_PREFIX + question
+
+    await save_message_idempotent(thread_id, "assistant", message)
 
     return {
         "response": message,

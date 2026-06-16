@@ -14,7 +14,14 @@ from langchain_core.messages import (
 from langgraph.prebuilt import ToolNode
 from langgraph.types import RunnableConfig
 
-from agents.shared.memory import load_thread, save_message, save_tool_call, save_tool_result
+from agents.shared.memory import (
+    load_thread,
+    save_message,
+    save_tool_call,
+    save_tool_result,
+    save_message_idempotent,
+    rebuild_messages_from_db,
+)
 from agents.shared.models import get_classifier_llm, get_llm
 from agents.shared.tools import personal_tools
 from agents.shared.video_buffer import video_buffer
@@ -51,11 +58,16 @@ async def load_history(state: PersonalState, config: RunnableConfig) -> Dict[str
     user_msg_id   = None
     if last_user_msg:
         text        = last_user_msg.content if isinstance(last_user_msg.content, str) else str(last_user_msg.content)
-        user_msg_id = await save_message(thread_id, "user", text)
+        user_msg_id = await save_message_idempotent(thread_id, "user", text)
+
+    # Rebuild history from DB and replace the messages list in the state
+    loaded_messages = await rebuild_messages_from_db(thread_id)
+    all_messages = [RemoveMessage(id=m.id) for m in messages if m.id] + loaded_messages
 
     return {
         "thread_id":               thread_id,
         "current_user_message_id": user_msg_id,
+        "messages":                all_messages,
     }
 
 

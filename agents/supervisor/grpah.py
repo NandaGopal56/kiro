@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Any, AsyncIterator, Dict, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import RunnableConfig
 
 from agents.base import AgentInfo, BaseAgent
+from agents.shared.checkpointer import get_checkpointer, load_previous_state, merge_with_new_messages
 
 from .nodes import ask_user, make_route_request, what_to_do
 from .state import SupervisorState
@@ -37,7 +37,9 @@ def build_supervisor_graph(agents: Dict[str, BaseAgent]):
     for agent_id in agents:
         g.add_edge(agent_id, END)
 
-    graph = g.compile(checkpointer=MemorySaver())
+    # Use persistent SQLite checkpointer for the supervisor
+    checkpointer = get_checkpointer("supervisor")
+    graph = g.compile(checkpointer=checkpointer)
     return graph
 
 
@@ -79,7 +81,13 @@ class Supervisor(BaseAgent):
     def graph(self):
         return self._graph
 
-    def _extract_response(self, result: Dict[str, Any]) -> str:
+    async def _extract_response(self, result: Dict[str, Any], thread_id: str) -> str:
+        from agents.shared.memory import load_thread
+        db_history = await load_thread(thread_id)
+        for msg in reversed(db_history):
+            if msg.get("role") == "assistant":
+                return msg.get("content") or ""
+        # Fallback to the old method if database is empty or doesn't have assistant messages
         messages = list(result.get("messages", []))
         for msg in reversed(messages):
             if isinstance(msg, AIMessage) and msg.content:
@@ -94,19 +102,40 @@ class Supervisor(BaseAgent):
         config: Optional[RunnableConfig] = None,
     ) -> str:
         """
-        Handle a user message end-to-end.
+        Handle a user message end-to-end with persistent state restoration.
+        
+        Loads previous checkpoint for the thread_id, merges with new message,
+        then routes the request to the appropriate agent.
+        
         Returns the final response as a plain string.
         """
         cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
 
-        initial_state = SupervisorState(
-            messages=[HumanMessage(content=task)],
-            thread_id=thread_id,
-            user_input=task,
-        )
+        from agents.shared.memory import save_message_idempotent
+        await save_message_idempotent(thread_id, "user", task)
 
-        result = await self._graph.ainvoke(initial_state, config=cfg)
-        return self._extract_response(result)
+        # Load previous checkpoint for this thread_id
+        previous_state = await load_previous_state(self.graph, thread_id, "supervisor")
+
+        if previous_state is None:
+            # First call — start a new session
+            initial_state = SupervisorState(
+                messages=[HumanMessage(content=task)],
+                thread_id=thread_id,
+                user_input=task,
+            )
+            result = await self._graph.ainvoke(initial_state, config=cfg)
+        else:
+            # Subsequent call — merge new message with previous checkpoint state
+            new_state_values = {
+                "messages": [HumanMessage(content=task)],
+                "thread_id": thread_id,
+                "user_input": task,
+            }
+            merged_state = merge_with_new_messages(previous_state, new_state_values)
+            result = await self._graph.ainvoke(merged_state, config=cfg)
+
+        return await self._extract_response(result, thread_id)
 
     async def stream(
         self,
@@ -116,22 +145,45 @@ class Supervisor(BaseAgent):
         config: Optional[RunnableConfig] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """
-        Stream the supervisor's progress node by node.
+        Stream the supervisor's progress node by node with persistent state restoration.
+        
+        Loads previous checkpoint for the thread_id, merges with new message,
+        then streams all routing and agent updates.
+        
         Each yielded dict has {"node": str, "update": dict}.
-
         Useful for showing the user "Routing your request..." then
         live updates from the chosen agent.
         """
         cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
 
-        initial_state = SupervisorState(
-            messages=[HumanMessage(content=task)],
-            thread_id=thread_id,
-            user_input=task,
-        )
+        from agents.shared.memory import save_message_idempotent
+        await save_message_idempotent(thread_id, "user", task)
 
-        async for update in self._graph.astream(
-            initial_state, config=cfg, stream_mode="updates"
-        ):
-            for node_name, node_update in update.items():
-                yield {"node": node_name, "update": node_update}
+        # Load previous checkpoint for this thread_id
+        previous_state = await load_previous_state(self.graph, thread_id, "supervisor")
+
+        if previous_state is None:
+            # First call — start a new session
+            initial_state = SupervisorState(
+                messages=[HumanMessage(content=task)],
+                thread_id=thread_id,
+                user_input=task,
+            )
+            async for update in self._graph.astream(
+                initial_state, config=cfg, stream_mode="updates"
+            ):
+                for node_name, node_update in update.items():
+                    yield {"node": node_name, "update": node_update}
+        else:
+            # Subsequent call — merge new message with previous checkpoint state
+            new_state_values = {
+                "messages": [HumanMessage(content=task)],
+                "thread_id": thread_id,
+                "user_input": task,
+            }
+            merged_state = merge_with_new_messages(previous_state, new_state_values)
+            async for update in self._graph.astream(
+                merged_state, config=cfg, stream_mode="updates"
+            ):
+                for node_name, node_update in update.items():
+                    yield {"node": node_name, "update": node_update}

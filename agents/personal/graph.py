@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Any, AsyncIterator, Dict, Optional
 
 from langchain_core.messages import HumanMessage
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import RunnableConfig
 
 from agents.base import AgentInfo, BaseAgent
+from agents.shared.checkpointer import get_checkpointer, load_previous_state, merge_with_new_messages
 
 from .nodes import (
     call_llm,
@@ -80,7 +80,9 @@ def build_personal_graph():
     g.add_edge("run_tools",       "call_llm")
     g.add_edge("compress_history", END)
 
-    graph = g.compile(checkpointer=MemorySaver())
+    # Use persistent SQLite checkpointer for this agent
+    checkpointer = get_checkpointer("personal")
+    graph = g.compile(checkpointer=checkpointer)
     return graph
 
 
@@ -123,12 +125,35 @@ class PersonalAgent(BaseAgent):
         context: Optional[Dict[str, Any]] = None,
         config: Optional[RunnableConfig] = None,
     ) -> str:
+        """
+        Invoke the personal agent with persistent state restoration.
+        
+        Loads previous checkpoint for the thread_id, merges with new message,
+        then executes the graph.
+        """
         cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
-        initial_state = PersonalState(
-            messages=[HumanMessage(content=task)],
-            thread_id=thread_id,
-        )
-        result = await self.graph.ainvoke(initial_state, config=cfg)
+
+        from agents.shared.memory import save_message_idempotent
+        await save_message_idempotent(thread_id, "user", task)
+
+        # Load previous checkpoint for this thread_id
+        previous_state = await load_previous_state(self.graph, thread_id, "personal")
+
+        if previous_state is None:
+            # First call — start a new session
+            initial_state = PersonalState(
+                messages=[HumanMessage(content=task)],
+                thread_id=thread_id,
+            )
+            result = await self.graph.ainvoke(initial_state, config=cfg)
+        else:
+            # Subsequent call — merge new message with previous checkpoint state
+            new_state_values = {
+                "messages": [HumanMessage(content=task)],
+                "thread_id": thread_id,
+            }
+            merged_state = merge_with_new_messages(previous_state, new_state_values)
+            result = await self.graph.ainvoke(merged_state, config=cfg)
 
         # Extract the last assistant message as the response
         messages = list(result.get("messages", []))
@@ -145,13 +170,40 @@ class PersonalAgent(BaseAgent):
         context: Optional[Dict[str, Any]] = None,
         config: Optional[RunnableConfig] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
+        """
+        Stream personal agent execution with persistent state restoration.
+        
+        Loads previous checkpoint for the thread_id, merges with new message,
+        then streams all node updates.
+        """
         cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
-        initial_state = PersonalState(
-            messages=[HumanMessage(content=task)],
-            thread_id=thread_id,
-        )
-        async for update in self.graph.astream(
-            initial_state, config=cfg, stream_mode="updates"
-        ):
-            for node_name, node_update in update.items():
-                yield {"node": node_name, "update": node_update}
+
+        from agents.shared.memory import save_message_idempotent
+        await save_message_idempotent(thread_id, "user", task)
+
+        # Load previous checkpoint for this thread_id
+        previous_state = await load_previous_state(self.graph, thread_id, "personal")
+
+        if previous_state is None:
+            # First call — start a new session
+            initial_state = PersonalState(
+                messages=[HumanMessage(content=task)],
+                thread_id=thread_id,
+            )
+            async for update in self.graph.astream(
+                initial_state, config=cfg, stream_mode="updates"
+            ):
+                for node_name, node_update in update.items():
+                    yield {"node": node_name, "update": node_update}
+        else:
+            # Subsequent call — merge new message with previous checkpoint state
+            new_state_values = {
+                "messages": [HumanMessage(content=task)],
+                "thread_id": thread_id,
+            }
+            merged_state = merge_with_new_messages(previous_state, new_state_values)
+            async for update in self.graph.astream(
+                merged_state, config=cfg, stream_mode="updates"
+            ):
+                for node_name, node_update in update.items():
+                    yield {"node": node_name, "update": node_update}
