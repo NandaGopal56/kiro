@@ -38,39 +38,6 @@ _llm_with_tools = get_llm().bind_tools(personal_tools)
 # How many past user turns to keep in the prompt window (beyond the summary)
 MAX_HISTORY_TURNS = 6
 
-
-# ---------------------------------------------------------------------------
-# Node 1 — load_history
-#
-# Only saves the incoming message to external storage.
-# Does NOT reload history from storage — LangGraph's MemorySaver checkpointer
-# already carries the full message history across turns automatically.
-#
-# When you switch to a persistent checkpointer (AsyncSqliteSaver, RedisSaver),
-# this node can be removed entirely — the checkpointer handles it.
-# ---------------------------------------------------------------------------
-
-async def load_history(state: PersonalState, config: RunnableConfig) -> Dict[str, Any]:
-    thread_id = config.get("configurable", {}).get("thread_id", "")
-    messages  = list(state.get("messages", []))
-
-    last_user_msg = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
-    user_msg_id   = None
-    if last_user_msg:
-        text        = last_user_msg.content if isinstance(last_user_msg.content, str) else str(last_user_msg.content)
-        user_msg_id = await save_message_idempotent(thread_id, "user", text)
-
-    # Rebuild history from DB and replace the messages list in the state
-    loaded_messages = await rebuild_messages_from_db(thread_id)
-    all_messages = [RemoveMessage(id=m.id) for m in messages if m.id] + loaded_messages
-
-    return {
-        "thread_id":               thread_id,
-        "current_user_message_id": user_msg_id,
-        "messages":                all_messages,
-    }
-
-
 # ---------------------------------------------------------------------------
 # Node 2 — decide_steps
 # Asks a cheap classifier which context steps (if any) to run before answering.

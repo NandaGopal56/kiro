@@ -28,33 +28,6 @@ MAX_ITERATIONS = 10
 _tool_node       = ToolNode(tools=research_tools)
 _llm_with_tools  = get_llm(strong=True).bind_tools(research_tools)
 
-
-# ---------------------------------------------------------------------------
-# Node 0 — load_history
-# Save the incoming user message and reconstruct the thread's history.
-# This keeps the research graph aware of prior turns for the same thread.
-# ---------------------------------------------------------------------------
-
-async def load_history(state: ResearchState, config: RunnableConfig) -> Dict[str, Any]:
-    thread_id = config.get("configurable", {}).get("thread_id", "") or state.get("thread_id", "")
-    messages = list(state.get("messages", []))
-
-    last_user_msg = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
-    if last_user_msg:
-        text = last_user_msg.content if isinstance(last_user_msg.content, str) else str(last_user_msg.content)
-        await save_message_idempotent(thread_id, "user", text)
-
-    loaded_messages = await rebuild_messages_from_db(thread_id)
-    all_messages = [RemoveMessage(id=m.id) for m in messages if m.id] + loaded_messages
-
-    print(all_messages)
-
-    return {
-        "thread_id": thread_id,
-        "messages":  all_messages,
-    }
-
-
 # ---------------------------------------------------------------------------
 # Node 1 — clarify_goal
 # Sharpens the question and asks any needed clarifying questions.

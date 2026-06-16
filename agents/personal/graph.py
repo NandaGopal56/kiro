@@ -17,7 +17,6 @@ from .nodes import (
     fetch_web_context,
     grab_video_frame,
     join_context,
-    load_history,
     pick_context_steps,
     run_tools,
     what_next,
@@ -30,7 +29,6 @@ def build_personal_graph():
     g = StateGraph(PersonalState)
 
     # -- Nodes ----------------------------------------------------------------
-    g.add_node("load_history",       load_history)
     g.add_node("decide_steps",       decide_steps)
 
     # Parallel context-gathering branches
@@ -44,8 +42,7 @@ def build_personal_graph():
     g.add_node("compress_history",   compress_history)
 
     # -- Edges ----------------------------------------------------------------
-    g.add_edge(START, "load_history")
-    g.add_edge("load_history", "decide_steps")
+    g.add_edge(START, "decide_steps")
 
     # Fan-out: decide_steps → one or more context nodes (or straight to call_llm)
     g.add_conditional_edges(

@@ -16,7 +16,6 @@ from .nodes import (
     create_plan,
     execute_step,
     finish,
-    load_history,
     reflect,
     should_continue,
 )
@@ -27,7 +26,6 @@ def build_research_graph():
     g = StateGraph(ResearchState)
 
     # -- Nodes ----------------------------------------------------------------
-    g.add_node("load_history",        load_history)
     g.add_node("clarify_goal",        clarify_goal)
     g.add_node("check_confirmation",  check_confirmation)
     g.add_node("create_plan",         create_plan)
@@ -36,8 +34,7 @@ def build_research_graph():
     g.add_node("finish",              finish)
 
     # -- Edges ----------------------------------------------------------------
-    g.add_edge(START, "load_history")
-    g.add_edge("load_history", "clarify_goal")
+    g.add_edge(START, "clarify_goal")
 
     # clarify_goal → check_confirmation (after graph resumes from interrupt)
     g.add_edge("clarify_goal", "check_confirmation")
