@@ -24,8 +24,13 @@ from .nodes import (
 from .state import PersonalState
 
 
-def build_personal_graph():
-    """Build and compile the personal agent's LangGraph."""
+def build_personal_graph(checkpointer=None):
+    """Build and compile the personal agent's LangGraph.
+
+    If `checkpointer` is None the compiled graph will use the default
+    behavior and inherit a parent graph's checkpointer when added as a
+    subgraph node. Pass an explicit checkpointer for standalone usage.
+    """
     g = StateGraph(PersonalState)
 
     # -- Nodes ----------------------------------------------------------------
@@ -77,13 +82,13 @@ def build_personal_graph():
     g.add_edge("run_tools",       "call_llm")
     g.add_edge("compress_history", END)
 
-    # Use persistent SQLite checkpointer for this agent
-    checkpointer = get_checkpointer("personal")
+    if checkpointer is not None:
+        print(f"DEBUG: build_personal_graph using provided checkpointer -> {repr(checkpointer)}")
     graph = g.compile(checkpointer=checkpointer)
     return graph
 
 
-# ---------------------------------------------------------------------------
+#---------------------------------------------------------------------------
 # PersonalAgent — the BaseAgent wrapper the supervisor talks to
 # ---------------------------------------------------------------------------
 
@@ -112,8 +117,18 @@ class PersonalAgent(BaseAgent):
     @property
     def graph(self):
         if self._graph is None:
-            self._graph = build_personal_graph()
+            # Standalone agent: compile with its own persistent checkpointer
+            self._graph = build_personal_graph(get_checkpointer("personal"))
         return self._graph
+
+    def get_compiled_graph(self, checkpointer=None):
+        """Return a compiled subgraph for embedding in a parent graph.
+
+        When `checkpointer` is None the compiled graph will inherit the
+        parent graph's checkpointer (recommended when added to the
+        supervisor graph).
+        """
+        return build_personal_graph(checkpointer=checkpointer)
 
     async def invoke(
         self,

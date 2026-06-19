@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv('/Users/nnandagopal/Desktop/personal_projects/RAG/.env')
 
 CHAT_MODEL = "gpt-4o-mini"
-STRONG_CHAT_MODEL = "gpt-4o"          # used by deep research for planning/reflection
+STRONG_CHAT_MODEL = "gpt-4o-mini"          # used by deep research for planning/reflection
 CLASSIFIER_MODEL = "gpt-4o-mini"
 EMBEDDING_MODEL = "text-embedding-ada-002"
 

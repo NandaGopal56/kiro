@@ -58,7 +58,35 @@ def get_checkpointer(agent_id: str) -> AsyncSqliteSaver:
     
     loop = _get_saver_loop()
     future = asyncio.run_coroutine_threadsafe(_create_saver(), loop)
-    return future.result()
+    saver = future.result()
+
+    # Monkeypatch the async save methods to add debug logging while keeping
+    # the original saver type (required by langgraph's type checks).
+    try:
+        orig_aput = saver.aput
+
+        async def logged_aput(config, checkpoint, metadata, new_versions):
+            tid = config.get("configurable", {}).get("thread_id")
+            print(f"DEBUG: saver.aput agent={agent_id} thread={tid} checkpoint_id={checkpoint.get('id')}")
+            return await orig_aput(config, checkpoint, metadata, new_versions)
+
+        saver.aput = logged_aput  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    try:
+        orig_aput_writes = saver.aput_writes
+
+        async def logged_aput_writes(config, writes, task_id, task_path: str = ""):
+            tid = config.get("configurable", {}).get("thread_id")
+            print(f"DEBUG: saver.aput_writes agent={agent_id} thread={tid} writes={len(writes)} task_id={task_id}")
+            return await orig_aput_writes(config, writes, task_id, task_path)
+
+        saver.aput_writes = logged_aput_writes  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    return saver
 
 
 async def load_previous_state(
@@ -88,7 +116,8 @@ async def load_previous_state(
     try:
         cfg = RunnableConfig(configurable={"thread_id": thread_id})
         state = await graph.aget_state(cfg)
-        
+        found = bool(state and state.values)
+        print(f"DEBUG: checkpointer.load_previous_state agent={agent_id} thread={thread_id} found={found}")
         if state and state.values:
             return dict(state.values)
         return None
@@ -124,9 +153,11 @@ def merge_with_new_messages(
         Dict: The merged state ready for graph execution
     """
     if previous_state is None:
+        print(f"DEBUG: merge_with_new_messages previous=None new_messages={len(new_state_values.get('messages', []))}")
         return new_state_values
     
     merged = dict(previous_state)
+    print(f"DEBUG: merge_with_new_messages previous_messages={len(previous_state.get('messages', []))} new_messages={len(new_state_values.get('messages', []))}")
     
     # Merge messages specially: keep all old messages, add new ones
     previous_messages = previous_state.get("messages", [])
@@ -147,6 +178,7 @@ def merge_with_new_messages(
         
         # Combine: old messages + unique new messages
         merged["messages"] = list(previous_messages) + unique_new_messages
+        print(f"DEBUG: merge_with_new_messages added_unique_new={len(unique_new_messages)} total_messages={len(merged['messages'])}")
     else:
         merged["messages"] = list(previous_messages)
     

@@ -25,34 +25,35 @@ from .state import ResearchState
 
 MAX_ITERATIONS = 10
 
-_tool_node       = ToolNode(tools=research_tools)
-_llm_with_tools  = get_llm(strong=True).bind_tools(research_tools)
+_tool_node      = ToolNode(tools=research_tools)
+_llm_with_tools = get_llm(strong=True).bind_tools(research_tools)
+
 
 # ---------------------------------------------------------------------------
-# Node 1 — clarify_goal
-# Sharpens the question and asks any needed clarifying questions.
-# The graph PAUSES after this node (interrupt_after) waiting for user reply.
+# Node — clarify_goal
+# Sharpens the question and asks any needed clarifying questions, or
+# incorporates the user's clarification into an updated goal.
+# This node always ends the graph run (see graph.py: clarify_goal -> END) —
+# the user's next message is what triggers the follow-up turn.
 # ---------------------------------------------------------------------------
-
 async def clarify_goal(state: ResearchState, config: RunnableConfig) -> Dict[str, Any]:
-    print(f"DEBUG: clarify_goal called with original={state.get('original_question')}, goal={state.get('goal')}, messages_len={len(state.get('messages', []))}")
-    original     = state.get("original_question", "")
+    original      = state.get("original_question", "")
     clarification = state.get("user_clarification", "")
-    prev_goal    = state.get("goal", "")
+    prev_goal     = state.get("goal", "")
 
+    # Fallback: scan messages only if original_question wasn't persisted
     if not original:
-        messages = list(state.get("messages", []))
-        from langchain_core.messages import HumanMessage as HM
-        for msg in reversed(messages):
-            if isinstance(msg, HM):
+        for msg in reversed(list(state.get("messages", []))):
+            if isinstance(msg, HumanMessage):
                 original = msg.content if isinstance(msg.content, str) else str(msg.content)
                 break
 
-    llm = get_llm(strong=True)
+    print(f"DEBUG: clarify_goal original={original!r} prev_goal={prev_goal!r} clarification={clarification!r}")
 
+    llm = get_llm(strong=True)
     thread_id = config.get("configurable", {}).get("thread_id", "") or state.get("thread_id", "")
 
-    # ── First pass: refine and ask questions ──────────────────────────────
+    # ── First pass: no goal yet ───────────────────────────────────────────
     if not prev_goal:
         response = await llm.ainvoke([
             SystemMessage(content=CLARIFIER_PROMPT),
@@ -61,13 +62,11 @@ async def clarify_goal(state: ResearchState, config: RunnableConfig) -> Dict[str
         data = _parse_json(response.content, {
             "refined_goal": f"Research goal: {original}",
             "questions":    [],
-            "reason":       "",
         })
 
         refined_goal = data.get("refined_goal", f"Research goal: {original}")
         questions    = data.get("questions", [])
 
-        # Build the message shown to the user
         if questions:
             q_block = "**I have a few questions to sharpen the research:**\n" + \
                       "\n".join(f"- {q}" for q in questions)
@@ -85,13 +84,14 @@ async def clarify_goal(state: ResearchState, config: RunnableConfig) -> Dict[str
         await save_message_idempotent(thread_id, "assistant", message)
 
         return {
+            "original_question":    original,
             "goal":                 refined_goal,
             "clarifying_questions": questions,
             "goal_confirmed":       False,
             "messages":             [AIMessage(content=message)],
         }
 
-    # ── Subsequent pass: user gave feedback, update the goal ─────────────
+    # ── Subsequent pass: user gave clarification/corrections ─────────────
     if clarification:
         response = await llm.ainvoke([
             SystemMessage(content=GOAL_UPDATER_PROMPT.format(
@@ -109,88 +109,99 @@ async def clarify_goal(state: ResearchState, config: RunnableConfig) -> Dict[str
             refined_goal=updated_goal,
         )
         await save_message_idempotent(thread_id, "assistant", message)
+
         return {
-            "goal":             updated_goal,
-            "goal_confirmed":   False,
-            "user_clarification": "",   # clear so next pass starts fresh
-            "messages":         [AIMessage(content=message)],
+            "original_question":  original,
+            "goal":               updated_goal,
+            "goal_confirmed":     False,
+            "user_clarification": "",
+            "messages":           [AIMessage(content=message)],
         }
 
-    # ── Nothing changed — just re-show the confirmation prompt ───────────
+    # ── Fallback: goal exists, no clarification text extracted ───────────
+    # (e.g. check_confirmation couldn't tell yes/no and didn't extract
+    # anything useful) — re-show the same confirmation prompt.
     message = CONFIRMATION_MESSAGE.format(
         original_question=original,
         refined_goal=prev_goal,
     )
     await save_message_idempotent(thread_id, "assistant", message)
+
     return {
-        "goal_confirmed": False,
-        "messages":       [AIMessage(content=message)],
+        "original_question": original,
+        "goal":              prev_goal,
+        "goal_confirmed":    False,
+        "messages":          [AIMessage(content=message)],
     }
 
 
 # ---------------------------------------------------------------------------
-# Node 2 — check_confirmation
-# Reads the user's reply and decides: confirmed or needs more changes?
-# This node runs AFTER the graph resumes from the interrupt.
+# Node — check_confirmation
+# Interprets the user's reply to a pending clarification: confirmed, or
+# more corrections needed? Only reached when state["goal"] is already set
+# and not yet confirmed (see graph.py: _entry_router), so the latest human
+# message in this invocation's state IS the reply to interpret.
 # ---------------------------------------------------------------------------
-
 async def check_confirmation(state: ResearchState, config: RunnableConfig) -> Dict[str, Any]:
     thread_id = config.get("configurable", {}).get("thread_id", "") or state.get("thread_id", "")
-    print(f"DEBUG: check_confirmation called for thread_id={thread_id}")
-    
-    # Load and reconstruct history from DB to get the latest user message
-    loaded_messages = await rebuild_messages_from_db(thread_id)
-    print(f"DEBUG: check_confirmation loaded messages from DB count={len(loaded_messages)}")
-    
+
+    # The merged state's messages already end with this turn's HumanMessage
+    # (see DeepResearchAgent._run), so just take the latest one directly —
+    # no need to round-trip through the DB to find it.
     user_reply = ""
-    from langchain_core.messages import HumanMessage as HM
-    for msg in reversed(loaded_messages):
-        if isinstance(msg, HM):
+    for msg in reversed(list(state.get("messages", []))):
+        if isinstance(msg, HumanMessage):
             user_reply = msg.content if isinstance(msg.content, str) else str(msg.content)
             break
 
-    # Simple confirmation check — catches common affirmative replies
-    confirm_words = {"yes", "confirmed", "confirm", "ok", "okay", "looks good",
-                     "good", "correct", "proceed", "start", "go", "yep", "sure",
-                     "perfect", "great", "fine", "approved", "approve"}
-    is_confirmed = any(w in user_reply.lower() for w in confirm_words)
-    print(f"DEBUG: check_confirmation user_reply='{user_reply}', is_confirmed={is_confirmed}")
+    print(f"DEBUG: check_confirmation thread_id={thread_id} goal={state.get('goal')!r} user_reply={user_reply!r}")
 
-    # Rebuild messages list: replace current messages in state with the db ones
-    messages = list(state.get("messages", []))
-    all_messages = [RemoveMessage(id=m.id) for m in messages if m.id] + loaded_messages
+    llm = get_llm(strong=True)
+    llm_prompt = (
+        f"Determine whether the following user reply confirms the research goal.\n"
+        f"Research goal: {state.get('goal', '')}\n"
+        f"Assistant asked the user to confirm the goal.\n"
+        f"User reply: {user_reply}\n\n"
+        "Return a JSON object with keys: \"is_confirmed\" (true/false),"
+        " and \"clarification\" (string; any extra instructions from the user, empty if none)."
+        " Respond with JSON only."
+    )
+    try:
+        response = await llm.ainvoke([
+            SystemMessage(content=llm_prompt),
+            HumanMessage(content="Please respond with JSON only."),
+        ])
+        data = _parse_json(response.content, {"is_confirmed": False, "clarification": ""})
+    except Exception:
+        data = {"is_confirmed": False, "clarification": ""}
+
+    is_confirmed            = bool(data.get("is_confirmed", False))
+    clarification_from_user = data.get("clarification", "")
+    print(f"DEBUG: check_confirmation is_confirmed={is_confirmed} clarification={clarification_from_user!r}")
 
     if is_confirmed:
-        return {
-            "goal_confirmed": True,
-            "user_clarification": "",
-            "messages": all_messages,
-        }
-    else:
-        # Treat their reply as clarification/corrections
-        return {
-            "goal_confirmed": False,
-            "user_clarification": user_reply,
-            "messages": all_messages,
-        }
+        return {"goal_confirmed": True, "user_clarification": ""}
+
+    # Treat the reply as clarification/corrections. Prefer what the LLM
+    # extracted; fall back to the raw reply if it extracted nothing.
+    return {
+        "goal_confirmed":     False,
+        "user_clarification": clarification_from_user or user_reply,
+    }
 
 
 # Router after check_confirmation
 def confirmation_router(state: ResearchState) -> str:
-    """Confirmed → plan. Not confirmed → loop back to clarify."""
+    """Confirmed → plan. Not confirmed → loop back to clarify (which ends
+    the run after re-asking)."""
     return "create_plan" if state.get("goal_confirmed", False) else "clarify_goal"
 
 
 # ---------------------------------------------------------------------------
-# Node 3 — create_plan
+# Node — create_plan
 # Breaks the confirmed goal into an ordered list of steps.
 # ---------------------------------------------------------------------------
-
 async def create_plan(state: ResearchState, config: RunnableConfig) -> Dict[str, Any]:
-    """
-    Called once after the goal is confirmed.
-    Produces the research plan the executor will follow step by step.
-    """
     goal = state.get("goal", "")
 
     if state.get("plan"):   # already planned (e.g. resumed session)
@@ -220,12 +231,10 @@ async def create_plan(state: ResearchState, config: RunnableConfig) -> Dict[str,
 
 
 # ---------------------------------------------------------------------------
-# Node 4 — execute_step
+# Node — execute_step
 # Runs one step from the plan using the LLM + search tools.
 # ---------------------------------------------------------------------------
-
 async def execute_step(state: ResearchState, config: RunnableConfig) -> Dict[str, Any]:
-    """Execute the current plan step with search tools, append findings."""
     goal        = state.get("goal", "")
     plan        = state.get("plan", [])
     current_idx = state.get("current_step", 0)
@@ -237,7 +246,7 @@ async def execute_step(state: ResearchState, config: RunnableConfig) -> Dict[str
         return {"is_done": True}
 
     current_step_text = plan[current_idx]
-    completed_steps   = "\n".join(f"  ✓ {plan[i]}" for i in range(current_idx)) or "  (none yet)"
+    completed_steps    = "\n".join(f"  ✓ {plan[i]}" for i in range(current_idx)) or "  (none yet)"
 
     prompt = EXECUTOR_PROMPT.format(
         goal=goal,
@@ -264,12 +273,10 @@ async def execute_step(state: ResearchState, config: RunnableConfig) -> Dict[str
 
 
 # ---------------------------------------------------------------------------
-# Node 5 — reflect
+# Node — reflect
 # Evaluates progress and decides: continue or finish?
 # ---------------------------------------------------------------------------
-
 async def reflect(state: ResearchState, config: RunnableConfig) -> Dict[str, Any]:
-    """Check if the goal is answered. If not, identify the next focus."""
     goal         = state.get("goal", "")
     plan         = state.get("plan", [])
     findings     = state.get("findings", "")
@@ -318,12 +325,10 @@ def should_continue(state: ResearchState) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Node 6 — finish
+# Node — finish
 # Synthesises all findings into the final answer.
 # ---------------------------------------------------------------------------
-
 async def finish(state: ResearchState, config: RunnableConfig) -> Dict[str, Any]:
-    """Produce the final, well-structured research answer."""
     goal     = state.get("goal", "")
     findings = state.get("findings", "")
 
@@ -346,7 +351,6 @@ async def finish(state: ResearchState, config: RunnableConfig) -> Dict[str, Any]
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
 async def _run_with_tools(messages: List[Any], config: RunnableConfig) -> str:
     """Mini tool-use loop for one research step. Returns final text."""
     current_messages = list(messages)

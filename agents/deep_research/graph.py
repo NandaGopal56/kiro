@@ -22,7 +22,28 @@ from .nodes import (
 from .state import ResearchState
 
 
-def build_research_graph():
+def _entry_router(state: ResearchState) -> str:
+    """
+    Decide where a fresh invocation enters the graph.
+
+    - No goal yet (or goal not confirmed and never set): this is either the
+      very first question, or the user is replying to a clarifying question.
+      Either way, run clarify_goal — it already knows how to tell those
+      cases apart (no prev_goal vs. prev_goal + clarification).
+    - Goal is set but not confirmed: the previous turn asked the user to
+      confirm/clarify, and this invocation IS that reply — go straight to
+      check_confirmation to interpret it.
+    - Goal already confirmed (e.g. a resumed/replayed session): skip ahead
+      to plan creation.
+    """
+    if state.get("goal_confirmed", False):
+        return "create_plan"
+    if state.get("goal"):
+        return "check_confirmation"
+    return "clarify_goal"
+
+
+def build_research_graph(checkpointer=None):
     g = StateGraph(ResearchState)
 
     # -- Nodes ----------------------------------------------------------------
@@ -34,10 +55,25 @@ def build_research_graph():
     g.add_node("finish",              finish)
 
     # -- Edges ----------------------------------------------------------------
-    g.add_edge(START, "clarify_goal")
+    # Route at entry instead of always starting at clarify_goal. Each
+    # invocation does exactly one logical step then returns — no interrupt
+    # needed, since the caller (DeepResearchAgent) controls turn-taking by
+    # invoking once per user message.
+    g.add_conditional_edges(
+        START,
+        _entry_router,
+        path_map={
+            "clarify_goal":       "clarify_goal",
+            "check_confirmation": "check_confirmation",
+            "create_plan":        "create_plan",
+        },
+    )
 
-    # clarify_goal → check_confirmation (after graph resumes from interrupt)
-    g.add_edge("clarify_goal", "check_confirmation")
+    # clarify_goal always ends the run here — it either asked a question
+    # or re-showed the confirmation prompt. The user's next message is what
+    # drives the next invocation, which _entry_router will send to
+    # check_confirmation.
+    g.add_edge("clarify_goal", END)
 
     # check_confirmation → create_plan  OR  loop back to clarify_goal
     g.add_conditional_edges(
@@ -63,11 +99,11 @@ def build_research_graph():
 
     g.add_edge("finish", END)
 
-    # Pause after clarify_goal so the user can reply
-    # The supervisor feeds the user's reply back in and calls .ainvoke(None) to resume
-    # Use persistent SQLite checkpointer instead of in-memory
-    checkpointer = get_checkpointer("deep_research")
-    graph = g.compile(checkpointer=checkpointer, interrupt_after=["clarify_goal"])
+    # No interrupt: each call to invoke()/stream() is one full pass through
+    # the graph from the appropriate entry point, driven by goal/goal_confirmed
+    # in the (checkpointed) state. The checkpointer still persists state
+    # between calls so the graph can pick up where it left off.
+    graph = g.compile(checkpointer=checkpointer)
     return graph
 
 
@@ -83,6 +119,12 @@ class DeepResearchAgent(BaseAgent):
       1. Agent asks clarifying questions + shows refined goal
       2. User confirms ("yes") or gives corrections
       3. Agent builds a plan, executes it step-by-step, reflects, finishes
+
+    Each call to invoke()/stream() handles exactly one user message and
+    returns. The graph's entry router uses the persisted state
+    (goal / goal_confirmed) to decide whether this message is the original
+    question, a reply to a clarifying question, or arrives after the goal
+    is already confirmed.
     """
 
     def __init__(self):
@@ -106,8 +148,44 @@ class DeepResearchAgent(BaseAgent):
     @property
     def graph(self):
         if self._graph is None:
-            self._graph = build_research_graph()
+            # Standalone agent: compile with its own persistent checkpointer
+            self._graph = build_research_graph(get_checkpointer("deep_research"))
         return self._graph
+
+    def get_compiled_graph(self, checkpointer=None):
+        """Return a compiled subgraph. When `checkpointer` is None the
+        compiled subgraph will inherit the parent's checkpointer when added
+        as a node to a parent graph (recommended for supervisor use).
+        """
+        return build_research_graph(checkpointer=checkpointer)
+
+    async def _run(self, task: str, thread_id: str, config: Optional[RunnableConfig] = None) -> Dict[str, Any]:
+        """Shared setup for invoke()/stream(): persist the user message,
+        load + merge prior state, and return (state, cfg) ready to run."""
+        cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
+
+        from agents.shared.memory import save_message_idempotent
+        await save_message_idempotent(thread_id, "user", task)
+
+        previous_state = await load_previous_state(self.graph, thread_id, "deep_research")
+        print(f"DEBUG: deep_research._run previous_state for thread={thread_id} -> {'present' if previous_state else 'none'}")
+
+        if previous_state is None:
+            state = ResearchState(
+                messages=[HumanMessage(content=task)],
+                thread_id=thread_id,
+                original_question=task,
+                goal_confirmed=False,
+            )
+        else:
+            new_state_values = {
+                "messages": [HumanMessage(content=task)],
+                "thread_id": thread_id,
+            }
+            state = merge_with_new_messages(previous_state, new_state_values)
+            print(f"DEBUG: deep_research._run merged_state_keys={list(state.keys())} merged_messages={len(state.get('messages', []))}")
+
+        return state, cfg
 
     async def invoke(
         self,
@@ -117,47 +195,15 @@ class DeepResearchAgent(BaseAgent):
         config: Optional[RunnableConfig] = None,
     ) -> str:
         """
-        Start or continue a research session with persistent state restoration.
-
-        First call:   task = the user's research question
-                      → graph runs clarify_goal, pauses, returns clarification message
-        Second call+: task = the user's reply (confirmation or corrections)
-                      → graph resumes from checkpoint, processes reply, either loops or proceeds to research
-        
-        The state is restored from SQLite checkpoint before execution, ensuring
-        all prior context for this thread_id is available to the agent.
+        Handle one user message for this research thread (question, a reply
+        to a clarifying question, or anything in between) and return the
+        agent's response text.
         """
-        cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
+        state, cfg = await self._run(task, thread_id, config)
+        result = await self.graph.ainvoke(state, config=cfg)
 
-        from agents.shared.memory import save_message_idempotent
-        await save_message_idempotent(thread_id, "user", task)
-
-        # Load previous checkpoint for this thread_id
-        previous_state = await load_previous_state(self.graph, thread_id, "deep_research")
-
-        # Check if a session already exists for this thread
-        if previous_state is None:
-            # First call — start a new session
-            initial_state = ResearchState(
-                messages=[HumanMessage(content=task)],
-                thread_id=thread_id,
-                original_question=task,
-                goal_confirmed=False,
-            )
-            result = await self.graph.ainvoke(initial_state, config=cfg)
-        else:
-            # Subsequent call — merge new message with previous checkpoint state
-            new_state_values = {
-                "messages": [HumanMessage(content=task)],
-                "thread_id": thread_id,
-            }
-            merged_state = merge_with_new_messages(previous_state, new_state_values)
-            result = await self.graph.ainvoke(None, config=cfg)
-
-        # Return the last AI message as the response
-        messages = list(result.get("messages", []))
         from langchain_core.messages import AIMessage
-        for msg in reversed(messages):
+        for msg in reversed(list(result.get("messages", []))):
             if isinstance(msg, AIMessage) and msg.content:
                 return msg.content if isinstance(msg.content, str) else str(msg.content)
 
@@ -170,40 +216,9 @@ class DeepResearchAgent(BaseAgent):
         context: Optional[Dict[str, Any]] = None,
         config: Optional[RunnableConfig] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
-        """
-        Stream all node updates, including clarification and research steps.
-        State is restored from SQLite checkpoint before execution.
-        """
-        cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
+        """Stream all node updates for one user message."""
+        state, cfg = await self._run(task, thread_id, config)
 
-        from agents.shared.memory import save_message_idempotent
-        await save_message_idempotent(thread_id, "user", task)
-
-        # Load previous checkpoint for this thread_id
-        previous_state = await load_previous_state(self.graph, thread_id, "deep_research")
-
-        if previous_state is None:
-            # First call — start a new session
-            initial_state = ResearchState(
-                messages=[HumanMessage(content=task)],
-                thread_id=thread_id,
-                original_question=task,
-                goal_confirmed=False,
-            )
-            async for update in self.graph.astream(
-                initial_state, config=cfg, stream_mode="updates"
-            ):
-                for node_name, node_update in update.items():
-                    yield {"node": node_name, "update": node_update}
-        else:
-            # Subsequent call — merge new message with previous checkpoint state
-            new_state_values = {
-                "messages": [HumanMessage(content=task)],
-                "thread_id": thread_id,
-            }
-            merged_state = merge_with_new_messages(previous_state, new_state_values)
-            async for update in self.graph.astream(
-                None, config=cfg, stream_mode="updates"
-            ):
-                for node_name, node_update in update.items():
-                    yield {"node": node_name, "update": node_update}
+        async for update in self.graph.astream(state, config=cfg, stream_mode="updates"):
+            for node_name, node_update in update.items():
+                yield {"node": node_name, "update": node_update}

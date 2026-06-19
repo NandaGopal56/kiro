@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Remo
 from langgraph.types import RunnableConfig
 
 from agents.shared.memory import save_message_idempotent, rebuild_messages_from_db
+from agents.shared.checkpointer import load_previous_state, merge_with_new_messages
 
 from agents.base import BaseAgent
 from agents.shared.models import get_classifier_llm
@@ -15,7 +16,7 @@ from .prompts import CLARIFICATION_PREFIX, ROUTER_PROMPT
 from .state import SupervisorState
 
 
-def make_route_request(agents: Dict[str, BaseAgent]):
+def make_route_request(agents: Dict[str, BaseAgent], parent_graph=None):
     """
     Build a router node bound to the provided agent registry.
     This avoids hidden module-global state.
@@ -72,13 +73,52 @@ def make_route_request(agents: Dict[str, BaseAgent]):
         messages = list(state.get("messages", []))
         all_messages = [RemoveMessage(id=m.id) for m in messages if m.id] + loaded_messages
 
-        return {
+        # Attempt to load previous checkpoint from both the agent's own DB
+        # (from standalone runs) and from the supervisor's DB (previous
+        # supervised runs). Prefer supervisor state when present.
+        try:
+            previous_agent_state = await load_previous_state(agents[chosen].graph, thread_id, chosen)
+        except Exception:
+            previous_agent_state = None
+
+        try:
+            previous_supervisor_state = None
+            if parent_graph is not None:
+                previous_supervisor_state = await load_previous_state(parent_graph, thread_id, "supervisor")
+        except Exception:
+            previous_supervisor_state = None
+
+        print(f"DEBUG: route_request previous_agent_state_present={bool(previous_agent_state)} previous_supervisor_state_present={bool(previous_supervisor_state)}")
+
+        # Merge precedence: supervisor state (most recent) overrides agent DB.
+        # Start with agent DB state, then overlay supervisor state, then add
+        # the new routing messages.
+        merged_base = merge_with_new_messages(previous_agent_state, {})
+        merged_with_supervisor = merge_with_new_messages(merged_base, previous_supervisor_state or {})
+        new_state_values = {"messages": all_messages, "thread_id": thread_id}
+        merged_agent_state = merge_with_new_messages(merged_with_supervisor, new_state_values)
+
+        print(f"DEBUG: route_request merged_messages_count={len(merged_agent_state.get('messages', [])) if merged_agent_state else 0}")
+
+        result = {
             "chosen_agent": chosen,
             "routing_reason": data.get("reason", ""),
             "needs_clarification": data.get("needs_clarification", False),
             "clarification_question": data.get("clarification_question", ""),
+            # Always pass messages for supervisor transparency
             "messages": all_messages,
         }
+
+        # Inject merged agent state fields so the downstream agent graph will
+        # receive the restored checkpoint values when invoked as a node.
+        if merged_agent_state:
+            for k, v in merged_agent_state.items():
+                # Avoid overwriting supervisor routing fields
+                if k in ("chosen_agent", "routing_reason", "needs_clarification", "clarification_question"):
+                    continue
+                result[k] = v
+
+        return result
 
     return route_request
 

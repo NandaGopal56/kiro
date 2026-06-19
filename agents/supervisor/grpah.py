@@ -12,17 +12,20 @@ from agents.shared.checkpointer import get_checkpointer, load_previous_state, me
 from .nodes import ask_user, make_route_request, what_to_do
 from .state import SupervisorState
 
-
 def build_supervisor_graph(agents: Dict[str, BaseAgent]):
     """Build and compile the supervisor's LangGraph."""
     g = StateGraph(SupervisorState)
 
     # -- Nodes ----------------------------------------------------------------
-    g.add_node("route_request", make_route_request(agents))
+    g.add_node("route_request", make_route_request(agents))  # remove parent_graph=g
     g.add_node("ask_user",      ask_user)
 
     for agent_id, agent in agents.items():
-        g.add_node(agent_id, agent.graph)
+        try:
+            subgraph = agent.get_compiled_graph(checkpointer=True)
+        except Exception:
+            subgraph = agent.graph
+        g.add_node(agent_id, subgraph)
 
     # -- Edges ----------------------------------------------------------------
     g.add_edge(START, "route_request")
@@ -39,9 +42,19 @@ def build_supervisor_graph(agents: Dict[str, BaseAgent]):
 
     # Use persistent SQLite checkpointer for the supervisor
     checkpointer = get_checkpointer("supervisor")
-    graph = g.compile(checkpointer=checkpointer)
-    return graph
 
+    # Agents that have an interactive clarify/confirm loop need the supervisor
+    # to pause after they run so the user can reply before the next invocation.
+    interactive_agents = [
+        agent_id for agent_id, agent in agents.items()
+        if getattr(agent, "requires_clarification", False)
+    ]
+
+    graph = g.compile(
+        checkpointer=checkpointer,
+        # interrupt_after=interactive_agents if interactive_agents else None,
+    )
+    return graph
 
 # ---------------------------------------------------------------------------
 # Supervisor — the public-facing class main.py instantiates
