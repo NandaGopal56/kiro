@@ -7,20 +7,15 @@ from typing import Any, Dict, List, Sequence
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
-    RemoveMessage,
     SystemMessage,
-    ToolMessage,
 )
 from langgraph.prebuilt import ToolNode
 from langgraph.types import RunnableConfig
 
 from agents.shared.memory import (
-    load_thread,
-    save_message,
     save_tool_call,
     save_tool_result,
-    save_message_idempotent,
-    rebuild_messages_from_db,
+    save_message_idempotent
 )
 from agents.shared.models import get_classifier_llm, get_llm
 from agents.shared.tools import personal_tools
@@ -147,7 +142,7 @@ async def call_llm(state: PersonalState, config: RunnableConfig) -> Dict[str, An
 
     response         = await _llm_with_tools.ainvoke(prompt, config=config)
     content          = response.content if isinstance(response.content, str) else ""
-    assistant_msg_id = await save_message(thread_id, "assistant", content)
+    assistant_msg_id = await save_message_idempotent(thread_id, "assistant", content)
 
     for tc in getattr(response, "tool_calls", []) or []:
         await save_tool_call(message_id=assistant_msg_id, call_id=tc.get("id", ""), tool_input=tc)

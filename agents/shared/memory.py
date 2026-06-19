@@ -17,16 +17,6 @@ from agents.shared.storage import (
     get_full_thread as _get_full_thread,
 )
 
-
-async def save_message(
-    thread_id: str,
-    role: str,        # "user" or "assistant"
-    content: str = "",
-) -> int:
-    """Save a message and return its integer DB row ID."""
-    return await _add_message(int(thread_id), role, content)
-
-
 async def save_tool_call(
     message_id: int,
     call_id: str,
@@ -72,7 +62,7 @@ async def save_message_idempotent(
         last_msg = db_history[-1]
         if last_msg.get("role") == role and last_msg.get("content") == content:
             return last_msg.get("message_id")
-    return await save_message(thread_id, role, content)
+    return await _add_message(int(thread_id), role, content)
 
 
 async def rebuild_messages_from_db(thread_id: str) -> list:

@@ -7,7 +7,12 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Remo
 from langgraph.prebuilt import ToolNode
 from langgraph.types import RunnableConfig
 
-from agents.shared.memory import save_message_idempotent, rebuild_messages_from_db
+from agents.shared.memory import (
+    save_message_idempotent,
+    rebuild_messages_from_db,
+    save_tool_call,
+    save_tool_result,
+)
 from agents.shared.models import get_llm
 from agents.shared.tools import research_tools
 
@@ -354,13 +359,34 @@ async def finish(state: ResearchState, config: RunnableConfig) -> Dict[str, Any]
 async def _run_with_tools(messages: List[Any], config: RunnableConfig) -> str:
     """Mini tool-use loop for one research step. Returns final text."""
     current_messages = list(messages)
+    thread_id = config.get("configurable", {}).get("thread_id", "") or config.get("metadata", {}).get("thread_id", "")
+
     for _ in range(5):
         response = await _llm_with_tools.ainvoke(current_messages, config=config)
+
+        # Persist the assistant message and any tool calls attached to it
+        content = response.content if isinstance(response.content, str) else str(response.content)
+        assistant_msg_id = None
+        if thread_id:
+            assistant_msg_id = await save_message_idempotent(thread_id, "assistant", content)
+
+            for tc in getattr(response, "tool_calls", []) or []:
+                await save_tool_call(message_id=assistant_msg_id, call_id=tc.get("id", ""), tool_input=tc)
+
         current_messages.append(response)
+
+        # If no tool calls, return the assistant's content
         if not getattr(response, "tool_calls", None):
-            return response.content if isinstance(response.content, str) else str(response.content)
+            return content
+
+        # Otherwise, invoke tools and persist their outputs
         tool_result = await _tool_node.ainvoke({"messages": current_messages}, config)
-        current_messages.extend(tool_result.get("messages", []))
+        tool_messages = tool_result.get("messages", [])
+        for tm in tool_messages:
+            if assistant_msg_id:
+                await save_tool_result(message_id=assistant_msg_id, call_id=tm.tool_call_id, output=tm.content)
+        current_messages.extend(tool_messages)
+
     last = current_messages[-1]
     return getattr(last, "content", "") or ""
 
