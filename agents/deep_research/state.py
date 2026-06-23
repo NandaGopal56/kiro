@@ -16,26 +16,35 @@ class ResearchState(TypedDict, total=False):
     # The original raw question from the user — never changed
     original_question: str
 
-    # The refined, confirmed goal — set after user confirms it
+    # The refined goal — updated as clarify_goal loops with the user
     # This is what the planner and executor actually work from
     goal: str
 
-    # Clarifying questions the agent asked the user
+    # Clarifying questions the agent asked the user (most recent round)
     clarifying_questions: List[str]
 
-    # User's answers to those questions (free text)
+    # User's answers to those questions (free text), consumed by clarify_goal
     user_clarification: str
 
-    # Whether the user has confirmed the goal and we can start researching
-    # False → still in clarify/confirm loop
-    # True  → proceed to planning and execution
-    goal_confirmed: bool
+    # Whether clarify_goal judges the goal sufficiently clear to plan from.
+    # False → still looping in clarify_goal (ends run, user replies next turn)
+    # True  → proceed to create_plan in the same invocation
+    goal_ready: bool
 
     # Ordered list of sub-questions / steps produced by the planner
     plan: List[str]
 
     # "Done when" criterion produced by the planner
     done_when: str
+
+    # Whether the user has confirmed the drafted plan via interrupt().
+    # False → check_plan_confirmation interrupt loop (revise via create_plan)
+    # True  → proceed to execute_step
+    plan_confirmed: bool
+
+    # User's revision feedback on the plan, consumed by create_plan to
+    # revise the existing plan in place (not regenerate from scratch)
+    plan_revision_notes: str
 
     # Which step in the plan we are currently executing (0-based index)
     current_step: int

@@ -20,3 +20,4 @@ chroma_store
 .DS_Store
 .storages
 .stages/
+.logs/

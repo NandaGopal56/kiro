@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
+import json
 from typing import Any, AsyncIterator, Dict, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import RunnableConfig
+from langgraph.types import Command, RunnableConfig
 
 from agents.base import AgentInfo, BaseAgent
 from agents.shared.checkpointer import get_checkpointer, load_previous_state, merge_with_new_messages
@@ -12,12 +14,44 @@ from agents.shared.checkpointer import get_checkpointer, load_previous_state, me
 from .nodes import ask_user, make_route_request, what_to_do
 from .state import SupervisorState
 
+# ---------------------------------------------------------------------------
+# Debug logging — toggle DEBUG_MODE to enable/disable state logging.
+# When enabled, every node logs its full input state to
+# .logs/supervisor.log before doing any work.
+# ---------------------------------------------------------------------------
+DEBUG_MODE = True
+
+_log = logging.getLogger("supervisor")
+if not _log.handlers:
+    import os
+    os.makedirs(".logs", exist_ok=True)
+    _fh = logging.FileHandler(".logs/supervisor.log")
+    _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    _log.addHandler(_fh)
+    _log.setLevel(logging.DEBUG if DEBUG_MODE else logging.WARNING)
+
+
+def _log_state(node_name: str, state: Dict[str, Any]) -> None:
+    """Log the full state at node entry. No-op when DEBUG_MODE is False."""
+    if not DEBUG_MODE:
+        return
+    loggable = {}
+    for k, v in state.items():
+        if isinstance(v, str) and len(v) > 500:
+            loggable[k] = v[:500] + f"... [truncated, total={len(v)}]"
+        elif k == "messages":
+            loggable[k] = f"[{len(v) if hasattr(v, '__len__') else '?'} messages]"
+        else:
+            loggable[k] = v
+    _log.debug("NODE ENTRY: %s\nSTATE: %s", node_name, json.dumps(loggable, default=str, indent=2))
+
+
 def build_supervisor_graph(agents: Dict[str, BaseAgent]):
     """Build and compile the supervisor's LangGraph."""
     g = StateGraph(SupervisorState)
 
     # -- Nodes ----------------------------------------------------------------
-    g.add_node("route_request", make_route_request(agents))  # remove parent_graph=g
+    g.add_node("route_request", make_route_request(agents))
     g.add_node("ask_user",      ask_user)
 
     for agent_id, agent in agents.items():
@@ -40,40 +74,15 @@ def build_supervisor_graph(agents: Dict[str, BaseAgent]):
     for agent_id in agents:
         g.add_edge(agent_id, END)
 
-    # Use persistent SQLite checkpointer for the supervisor
     checkpointer = get_checkpointer("supervisor")
+    return g.compile(checkpointer=checkpointer)
 
-    # Agents that have an interactive clarify/confirm loop need the supervisor
-    # to pause after they run so the user can reply before the next invocation.
-    interactive_agents = [
-        agent_id for agent_id, agent in agents.items()
-        if getattr(agent, "requires_clarification", False)
-    ]
-
-    graph = g.compile(
-        checkpointer=checkpointer,
-        # interrupt_after=interactive_agents if interactive_agents else None,
-    )
-    return graph
 
 # ---------------------------------------------------------------------------
-# Supervisor — the public-facing class main.py instantiates
+# Supervisor
 # ---------------------------------------------------------------------------
 
 class Supervisor(BaseAgent):
-    """
-    Top-level entry point.
-
-    Create one at startup:
-        supervisor = Supervisor(agents={
-            "personal":      PersonalAgent(),
-            "deep_research": DeepResearchAgent(),
-        })
-
-    Then call it per request:
-        answer = await supervisor.run("...", thread_id="user-123")
-    """
-
     def __init__(self, agents: Dict[str, BaseAgent]):
         self.agents = agents
         self._graph = build_supervisor_graph(agents)
@@ -83,10 +92,7 @@ class Supervisor(BaseAgent):
         return AgentInfo(
             agent_id="supervisor",
             name="Supervisor",
-            description=(
-                "Routes requests across registered agents and can act as a "
-                "single entry point for multi-agent execution."
-            ),
+            description="Routes requests across registered agents.",
             can_handle_long_tasks=True,
         )
 
@@ -94,13 +100,73 @@ class Supervisor(BaseAgent):
     def graph(self):
         return self._graph
 
+    async def _pending_interrupt(self, thread_id: str, cfg: RunnableConfig) -> bool:
+        """
+        Check whether this thread is paused at an interrupt ANYWHERE in the
+        graph, including inside a subgraph node (e.g. deep_research's
+        check_plan_confirmation).
+
+        subgraphs=True is mandatory: without it, aget_state only reads the
+        supervisor's own top-level state and never sees an interrupt() raised
+        inside a child graph's checkpoint_ns.
+        """
+        if not thread_id:
+            return False
+        try:
+            snapshot = await self._graph.aget_state(cfg, subgraphs=True)
+            pending = bool(snapshot.next)
+            _log.debug("_pending_interrupt thread=%s pending=%s next=%s",
+                       thread_id, pending, snapshot.next)
+            return pending
+        except Exception as e:
+            _log.debug("_pending_interrupt thread=%s error=%s", thread_id, e)
+            return False
+
+    async def _run(self, task: str, thread_id: str, config: Optional[RunnableConfig]):
+        """
+        Shared setup for invoke()/stream().
+
+        If the thread is paused at an interrupt anywhere in the graph
+        (including inside a subgraph), resume it with Command(resume=task)
+        using the SAME config — no new state dict. This is the correct
+        LangGraph resume pattern: LangGraph's own machinery delivers `task`
+        to the waiting interrupt() call.
+
+        Only when nothing is pending do we fall through to the normal
+        route_request path, which rebuilds state and classifies the intent.
+        """
+        cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
+
+        from agents.shared.memory import save_message_idempotent
+        await save_message_idempotent(thread_id, "user", task)
+
+        if await self._pending_interrupt(thread_id, cfg):
+            _log.debug("_run thread=%s resuming pending interrupt reply=%r", thread_id, task)
+            return Command(resume=task), cfg
+
+        previous_state = await load_previous_state(self.graph, thread_id, "supervisor")
+
+        if previous_state is None:
+            state = SupervisorState(
+                messages=[HumanMessage(content=task)],
+                thread_id=thread_id,
+                user_input=task,
+            )
+        else:
+            state = merge_with_new_messages(previous_state, {
+                "messages":   [HumanMessage(content=task)],
+                "thread_id":  thread_id,
+                "user_input": task,
+            })
+
+        return state, cfg
+
     async def _extract_response(self, result: Dict[str, Any], thread_id: str) -> str:
         from agents.shared.memory import load_thread
         db_history = await load_thread(thread_id)
         for msg in reversed(db_history):
             if msg.get("role") == "assistant":
                 return msg.get("content") or ""
-        # Fallback to the old method if database is empty or doesn't have assistant messages
         messages = list(result.get("messages", []))
         for msg in reversed(messages):
             if isinstance(msg, AIMessage) and msg.content:
@@ -114,39 +180,17 @@ class Supervisor(BaseAgent):
         context: Optional[Dict[str, Any]] = None,
         config: Optional[RunnableConfig] = None,
     ) -> str:
-        """
-        Handle a user message end-to-end with persistent state restoration.
-        
-        Loads previous checkpoint for the thread_id, merges with new message,
-        then routes the request to the appropriate agent.
-        
-        Returns the final response as a plain string.
-        """
-        cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
+        run_input, cfg = await self._run(task, thread_id, config)
+        result = await self._graph.ainvoke(run_input, config=cfg)
 
-        from agents.shared.memory import save_message_idempotent
-        await save_message_idempotent(thread_id, "user", task)
-
-        # Load previous checkpoint for this thread_id
-        previous_state = await load_previous_state(self.graph, thread_id, "supervisor")
-
-        if previous_state is None:
-            # First call — start a new session
-            initial_state = SupervisorState(
-                messages=[HumanMessage(content=task)],
-                thread_id=thread_id,
-                user_input=task,
-            )
-            result = await self._graph.ainvoke(initial_state, config=cfg)
-        else:
-            # Subsequent call — merge new message with previous checkpoint state
-            new_state_values = {
-                "messages": [HumanMessage(content=task)],
-                "thread_id": thread_id,
-                "user_input": task,
-            }
-            merged_state = merge_with_new_messages(previous_state, new_state_values)
-            result = await self._graph.ainvoke(merged_state, config=cfg)
+        # If this invocation caused a NEW interrupt (e.g. deep_research just
+        # drafted a plan and paused), return the interrupt's message directly.
+        # No assistant message is in the DB yet at this point.
+        pending = result.get("__interrupt__")
+        if pending:
+            payload = pending[0].value if hasattr(pending[0], "value") else pending[0]
+            _log.debug("invoke thread=%s new interrupt payload=%r", thread_id, payload)
+            return payload.get("message", str(payload)) if isinstance(payload, dict) else str(payload)
 
         return await self._extract_response(result, thread_id)
 
@@ -157,46 +201,7 @@ class Supervisor(BaseAgent):
         context: Optional[Dict[str, Any]] = None,
         config: Optional[RunnableConfig] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
-        """
-        Stream the supervisor's progress node by node with persistent state restoration.
-        
-        Loads previous checkpoint for the thread_id, merges with new message,
-        then streams all routing and agent updates.
-        
-        Each yielded dict has {"node": str, "update": dict}.
-        Useful for showing the user "Routing your request..." then
-        live updates from the chosen agent.
-        """
-        cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
-
-        from agents.shared.memory import save_message_idempotent
-        await save_message_idempotent(thread_id, "user", task)
-
-        # Load previous checkpoint for this thread_id
-        previous_state = await load_previous_state(self.graph, thread_id, "supervisor")
-
-        if previous_state is None:
-            # First call — start a new session
-            initial_state = SupervisorState(
-                messages=[HumanMessage(content=task)],
-                thread_id=thread_id,
-                user_input=task,
-            )
-            async for update in self._graph.astream(
-                initial_state, config=cfg, stream_mode="updates"
-            ):
-                for node_name, node_update in update.items():
-                    yield {"node": node_name, "update": node_update}
-        else:
-            # Subsequent call — merge new message with previous checkpoint state
-            new_state_values = {
-                "messages": [HumanMessage(content=task)],
-                "thread_id": thread_id,
-                "user_input": task,
-            }
-            merged_state = merge_with_new_messages(previous_state, new_state_values)
-            async for update in self._graph.astream(
-                merged_state, config=cfg, stream_mode="updates"
-            ):
-                for node_name, node_update in update.items():
-                    yield {"node": node_name, "update": node_update}
+        run_input, cfg = await self._run(task, thread_id, config)
+        async for update in self._graph.astream(run_input, config=cfg, stream_mode="updates"):
+            for node_name, node_update in update.items():
+                yield {"node": node_name, "update": node_update}
