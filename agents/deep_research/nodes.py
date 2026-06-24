@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any, Dict, List
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -28,37 +27,27 @@ from .prompts import (
 )
 from .state import ResearchState
 
-# ---------------------------------------------------------------------------
-# Debug logging — toggle DEBUG_MODE to enable/disable state logging.
-# When enabled, every node logs its full input state to
-# .logs/deep_research.log before doing any work.
-# ---------------------------------------------------------------------------
-DEBUG_MODE = True
+from shared.logging import get_logger, log_state
 
-_log = logging.getLogger("deep_research")
-if not _log.handlers:
-    import os
-    os.makedirs(".logs", exist_ok=True)
-    _fh = logging.FileHandler(".logs/deep_research.log")
-    _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-    _log.addHandler(_fh)
-    _log.setLevel(logging.DEBUG if DEBUG_MODE else logging.WARNING)
+DEBUG_MODE = True
+logger = get_logger("agents.deep_research.nodes", log_file="deep_research.log")
 
 
 def _log_state(node_name: str, state: Dict[str, Any]) -> None:
-    """Log the full state at node entry. No-op when DEBUG_MODE is False."""
+    """Log the state at node entry when DEBUG_MODE is True. Uses shared logger."""
     if not DEBUG_MODE:
         return
-    # Truncate long text fields so the log stays readable
-    loggable = {}
+    # Keep some truncation for readability
+    safe_state = {}
     for k, v in state.items():
-        if isinstance(v, str) and len(v) > 500:
-            loggable[k] = v[:500] + f"... [truncated, total={len(v)}]"
+        if isinstance(v, str) and len(v) > 1000:
+            safe_state[k] = v[:1000] + f"... [truncated, total={len(v)}]"
         elif k == "messages":
-            loggable[k] = f"[{len(v)} messages]"
+            safe_state[k] = f"[{len(v)} messages]"
         else:
-            loggable[k] = v
-    _log.debug("NODE ENTRY: %s\nSTATE: %s", node_name, json.dumps(loggable, default=str, indent=2))
+            safe_state[k] = v
+    logger.debug("NODE ENTRY: %s", node_name)
+    log_state(logger, f"deep_research.node.{node_name}.input_state", safe_state)
 
 
 MAX_ITERATIONS = 10
@@ -98,7 +87,7 @@ async def clarify_goal(state: ResearchState, config: RunnableConfig) -> Dict[str
                 user_reply = msg.content if isinstance(msg.content, str) else str(msg.content)
                 break
 
-    _log.debug("clarify_goal: original=%r prev_goal=%r user_reply=%r", original, prev_goal, user_reply)
+    logger.debug("clarify_goal: original=%r prev_goal=%r user_reply=%r", original, prev_goal, user_reply)
 
     llm = get_llm(strong=True)
     thread_id = config.get("configurable", {}).get("thread_id", "") or state.get("thread_id", "")
@@ -119,8 +108,8 @@ async def clarify_goal(state: ResearchState, config: RunnableConfig) -> Dict[str
         questions    = data.get("questions", [])
         goal_ready   = bool(data.get("goal_ready", not questions))
 
-        _log.debug("clarify_goal first-pass: refined_goal=%r questions=%r goal_ready=%r",
-                   refined_goal, questions, goal_ready)
+        logger.debug("clarify_goal first-pass: refined_goal=%r questions=%r goal_ready=%r",
+               refined_goal, questions, goal_ready)
 
         if not goal_ready and questions:
             q_block = "**I have a few questions to sharpen the research:**\n" + \
@@ -165,7 +154,7 @@ async def clarify_goal(state: ResearchState, config: RunnableConfig) -> Dict[str
     questions    = data.get("questions", [])
     goal_ready   = bool(data.get("goal_ready", not questions))
 
-    _log.debug("clarify_goal subsequent-pass: updated_goal=%r questions=%r goal_ready=%r",
+    logger.debug("clarify_goal subsequent-pass: updated_goal=%r questions=%r goal_ready=%r",
                updated_goal, questions, goal_ready)
 
     if not goal_ready and questions:
@@ -210,7 +199,7 @@ async def create_plan(state: ResearchState, config: RunnableConfig) -> Dict[str,
     existing_plan  = state.get("plan", [])
     revision_notes = state.get("plan_revision_notes", "")
 
-    _log.debug("create_plan: goal=%r existing_plan_len=%d revision_notes=%r",
+    logger.debug("create_plan: goal=%r existing_plan_len=%d revision_notes=%r",
                goal, len(existing_plan), revision_notes)
 
     if existing_plan and revision_notes:
@@ -232,7 +221,7 @@ async def create_plan(state: ResearchState, config: RunnableConfig) -> Dict[str,
     thread_id = config.get("configurable", {}).get("thread_id", "") or state.get("thread_id", "")
     await save_message_idempotent(thread_id, "assistant", plan_text)
 
-    _log.debug("create_plan: produced %d steps", len(plan.steps))
+    logger.debug("create_plan: produced %d steps", len(plan.steps))
 
     return {
         "plan":                plan.steps,
@@ -272,7 +261,7 @@ async def check_plan_confirmation(state: ResearchState, config: RunnableConfig) 
         plan_steps="\n".join(f"  {i + 1}. {s}" for i, s in enumerate(plan)),
     )
 
-    _log.debug("check_plan_confirmation: issuing interrupt for plan confirmation goal=%r steps=%d",
+    logger.debug("check_plan_confirmation: issuing interrupt for plan confirmation goal=%r steps=%d",
                goal, len(plan))
 
     # Pauses here on first pass. On resume, returns the user's reply string.
@@ -284,7 +273,7 @@ async def check_plan_confirmation(state: ResearchState, config: RunnableConfig) 
     })
     user_reply_text = user_reply if isinstance(user_reply, str) else str(user_reply)
 
-    _log.debug("check_plan_confirmation: resumed with user_reply=%r", user_reply_text)
+    logger.debug("check_plan_confirmation: resumed with user_reply=%r", user_reply_text)
 
     llm = get_llm(strong=True)
     llm_prompt = (
@@ -307,7 +296,7 @@ async def check_plan_confirmation(state: ResearchState, config: RunnableConfig) 
     is_confirmed   = bool(data.get("is_confirmed", False))
     revision_notes = data.get("revision_notes", "")
 
-    _log.debug("check_plan_confirmation: is_confirmed=%r revision_notes=%r",
+    logger.debug("check_plan_confirmation: is_confirmed=%r revision_notes=%r",
                is_confirmed, revision_notes)
 
     if is_confirmed:
@@ -342,7 +331,7 @@ async def execute_step(state: ResearchState, config: RunnableConfig) -> Dict[str
     next_focus  = state.get("next_focus", "")
     iteration   = state.get("iteration", 0)
 
-    _log.debug("execute_step: current_idx=%d iteration=%d total_steps=%d next_focus=%r",
+    logger.debug("execute_step: current_idx=%d iteration=%d total_steps=%d next_focus=%r",
                current_idx, iteration, len(plan), next_focus)
 
     if current_idx >= len(plan):
@@ -367,7 +356,7 @@ async def execute_step(state: ResearchState, config: RunnableConfig) -> Dict[str
     step_header  = f"\n\n--- Step {current_idx + 1}: {current_step_text} ---\n"
     new_findings = findings + step_header + step_findings
 
-    _log.debug("execute_step: step %d done, findings_total_len=%d", current_idx + 1, len(new_findings))
+    logger.debug("execute_step: step %d done, findings_total_len=%d", current_idx + 1, len(new_findings))
 
     return {
         "findings":     new_findings,
@@ -390,7 +379,7 @@ async def reflect(state: ResearchState, config: RunnableConfig) -> Dict[str, Any
     current_step = state.get("current_step", 0)
     done_when    = state.get("done_when", f"All {len(plan)} steps are complete.")
 
-    _log.debug("reflect: iteration=%d current_step=%d total_steps=%d", iteration, current_step, len(plan))
+    logger.debug("reflect: iteration=%d current_step=%d total_steps=%d", iteration, current_step, len(plan))
 
     prompt = REFLECTOR_PROMPT.format(
         goal=goal,
@@ -412,7 +401,7 @@ async def reflect(state: ResearchState, config: RunnableConfig) -> Dict[str, Any
     reason     = data.get("reason", "")
     status_msg = "✔ Research complete." if is_done else f"🔄 Continuing — {reason}"
 
-    _log.debug("reflect: is_done=%r next_focus=%r reason=%r", is_done, next_focus, reason)
+    logger.debug("reflect: is_done=%r next_focus=%r reason=%r", is_done, next_focus, reason)
 
     return {
         "is_done":    is_done,
@@ -442,7 +431,7 @@ async def finish(state: ResearchState, config: RunnableConfig) -> Dict[str, Any]
     goal     = state.get("goal", "")
     findings = state.get("findings", "")
 
-    _log.debug("finish: goal=%r findings_len=%d", goal, len(findings))
+    logger.debug("finish: goal=%r findings_len=%d", goal, len(findings))
 
     llm = get_llm(strong=True)
     response = await llm.ainvoke([
@@ -454,7 +443,7 @@ async def finish(state: ResearchState, config: RunnableConfig) -> Dict[str, Any]
     content = response.content if isinstance(response.content, str) else str(response.content)
     await save_message_idempotent(thread_id, "assistant", content)
 
-    _log.debug("finish: final_answer_len=%d", len(content))
+    logger.debug("finish: final_answer_len=%d", len(content))
 
     return {
         "final_answer": content,

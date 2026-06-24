@@ -11,6 +11,9 @@ import requests
 from dotenv import load_dotenv
 from langchain_core.tools import tool
 from tavily import TavilyClient
+from shared.logging import get_logger
+
+logger = get_logger("agents.shared.tools", log_file="tools.log")
 
 # =============================================================================
 # Configuration
@@ -29,11 +32,7 @@ def log_tool_call(tool_name: str, **kwargs):
     """
     Standardized logging for all tool calls.
     """
-    print(
-        f"[{datetime.datetime.now().isoformat()}] "
-        f"TOOL={tool_name} "
-        f"ARGS={json.dumps(kwargs, default=str, ensure_ascii=False)}"
-    )
+    logger.info("TOOL=%s ARGS=%s", tool_name, json.dumps(kwargs, default=str, ensure_ascii=False))
 
 
 # =============================================================================

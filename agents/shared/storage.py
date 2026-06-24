@@ -53,7 +53,10 @@ async def init_db():
         );
         """)
         await db.commit()
-        print("Database initialized.")
+        from shared.logging import get_logger
+
+        logger = get_logger("agents.shared.storage", log_file="storage.log")
+        logger.info("Database initialized at %s", _database_path())
 
 
 # -------------------------------------------------------------

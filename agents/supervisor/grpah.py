@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import logging
 import json
 from typing import Any, AsyncIterator, Dict, Optional
+from shared.logging import get_logger, log_state
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
@@ -14,51 +14,43 @@ from agents.shared.checkpointer import get_checkpointer, load_previous_state, me
 from .nodes import ask_user, make_route_request, what_to_do
 from .state import SupervisorState
 
-# ---------------------------------------------------------------------------
-# Debug logging — toggle DEBUG_MODE to enable/disable state logging.
-# When enabled, every node logs its full input state to
-# .logs/supervisor.log before doing any work.
-# ---------------------------------------------------------------------------
 DEBUG_MODE = True
-
-_log = logging.getLogger("supervisor")
-if not _log.handlers:
-    import os
-    os.makedirs(".logs", exist_ok=True)
-    _fh = logging.FileHandler(".logs/supervisor.log")
-    _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-    _log.addHandler(_fh)
-    _log.setLevel(logging.DEBUG if DEBUG_MODE else logging.WARNING)
+logger = get_logger("agents.supervisor", log_file="supervisor.log")
 
 
 def _log_state(node_name: str, state: Dict[str, Any]) -> None:
-    """Log the full state at node entry. No-op when DEBUG_MODE is False."""
+    """Log the full state at node entry using shared logging."""
     if not DEBUG_MODE:
         return
-    loggable = {}
+    safe = {}
     for k, v in state.items():
         if isinstance(v, str) and len(v) > 500:
-            loggable[k] = v[:500] + f"... [truncated, total={len(v)}]"
+            safe[k] = v[:500] + f"... [truncated, total={len(v)}]"
         elif k == "messages":
-            loggable[k] = f"[{len(v) if hasattr(v, '__len__') else '?'} messages]"
+            safe[k] = f"[{len(v) if hasattr(v, '__len__') else '?'} messages]"
         else:
-            loggable[k] = v
-    _log.debug("NODE ENTRY: %s\nSTATE: %s", node_name, json.dumps(loggable, default=str, indent=2))
+            safe[k] = v
+    logger.debug("NODE ENTRY: %s", node_name)
+    log_state(logger, f"supervisor.node.{node_name}.input_state", safe)
 
 
 def build_supervisor_graph(agents: Dict[str, BaseAgent]):
     """Build and compile the supervisor's LangGraph."""
+    logger.info("Building supervisor graph for agents: %s", list(agents.keys()))
     g = StateGraph(SupervisorState)
 
     # -- Nodes ----------------------------------------------------------------
     g.add_node("route_request", make_route_request(agents))
     g.add_node("ask_user",      ask_user)
+    logger.debug("Added core nodes: route_request, ask_user")
 
     for agent_id, agent in agents.items():
         try:
             subgraph = agent.get_compiled_graph(checkpointer=True)
+            logger.debug("Compiled subgraph for agent=%s (standalone compiled)", agent_id)
         except Exception:
             subgraph = agent.graph
+            logger.debug("Using existing compiled graph for agent=%s", agent_id)
         g.add_node(agent_id, subgraph)
 
     # -- Edges ----------------------------------------------------------------
@@ -75,7 +67,9 @@ def build_supervisor_graph(agents: Dict[str, BaseAgent]):
         g.add_edge(agent_id, END)
 
     checkpointer = get_checkpointer("supervisor")
-    return g.compile(checkpointer=checkpointer)
+    compiled = g.compile(checkpointer=checkpointer)
+    logger.info("Supervisor graph compiled with checkpointer for 'supervisor'")
+    return compiled
 
 
 # ---------------------------------------------------------------------------
@@ -115,11 +109,10 @@ class Supervisor(BaseAgent):
         try:
             snapshot = await self._graph.aget_state(cfg, subgraphs=True)
             pending = bool(snapshot.next)
-            _log.debug("_pending_interrupt thread=%s pending=%s next=%s",
-                       thread_id, pending, snapshot.next)
+            logger.debug("_pending_interrupt thread=%s pending=%s next=%s", thread_id, pending, snapshot.next)
             return pending
         except Exception as e:
-            _log.debug("_pending_interrupt thread=%s error=%s", thread_id, e)
+            logger.debug("_pending_interrupt thread=%s error=%s", thread_id, e)
             return False
 
     async def _run(self, task: str, thread_id: str, config: Optional[RunnableConfig]):
@@ -136,15 +129,19 @@ class Supervisor(BaseAgent):
         route_request path, which rebuilds state and classifies the intent.
         """
         cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
+        logger.info("_run start: thread=%s task_preview=%s", thread_id, (task[:200] + "...") if len(task) > 200 else task)
 
         from agents.shared.memory import save_message_idempotent
         await save_message_idempotent(thread_id, "user", task)
+        logger.debug("Saved user message idempotent for thread=%s", thread_id)
 
         if await self._pending_interrupt(thread_id, cfg):
-            _log.debug("_run thread=%s resuming pending interrupt reply=%r", thread_id, task)
+            logger.debug("_run thread=%s resuming pending interrupt reply=%r", thread_id, task)
             return Command(resume=task), cfg
 
         previous_state = await load_previous_state(self.graph, thread_id, "supervisor")
+        logger.debug("Loaded previous_state present=%s for thread=%s", bool(previous_state), thread_id)
+        log_state(logger, "supervisor.previous_state", previous_state)
 
         if previous_state is None:
             state = SupervisorState(
@@ -152,12 +149,15 @@ class Supervisor(BaseAgent):
                 thread_id=thread_id,
                 user_input=task,
             )
+            logger.debug("Initialized new SupervisorState for thread=%s", thread_id)
         else:
             state = merge_with_new_messages(previous_state, {
                 "messages":   [HumanMessage(content=task)],
                 "thread_id":  thread_id,
                 "user_input": task,
             })
+            logger.debug("Merged previous state with new message for thread=%s", thread_id)
+            log_state(logger, "supervisor.merged_state", state)
 
         return state, cfg
 
@@ -189,7 +189,7 @@ class Supervisor(BaseAgent):
         pending = result.get("__interrupt__")
         if pending:
             payload = pending[0].value if hasattr(pending[0], "value") else pending[0]
-            _log.debug("invoke thread=%s new interrupt payload=%r", thread_id, payload)
+            logger.debug("invoke thread=%s new interrupt payload=%r", thread_id, payload)
             return payload.get("message", str(payload)) if isinstance(payload, dict) else str(payload)
 
         return await self._extract_response(result, thread_id)

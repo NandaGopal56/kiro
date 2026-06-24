@@ -20,6 +20,9 @@ from agents.shared.memory import (
 from agents.shared.models import get_classifier_llm, get_llm
 from agents.shared.tools import personal_tools
 from agents.shared.video_buffer import video_buffer
+from shared.logging import get_logger, log_state
+
+logger = get_logger("agents.personal.nodes", log_file="personal.log")
 
 from .prompts import STEP_CLASSIFIER_PROMPT, SUMMARY_PROMPT, SYSTEM_PROMPT
 from .state import PersonalState
@@ -40,6 +43,8 @@ MAX_HISTORY_TURNS = 6
 # ---------------------------------------------------------------------------
 
 async def decide_steps(state: PersonalState, config: RunnableConfig) -> Dict[str, Any]:
+    logger.debug("decide_steps called for thread=%s", config.get("configurable", {}).get("thread_id"))
+    log_state(logger, "decide_steps.input_state", state)
     messages      = list(state.get("messages", []))
     last_user_msg = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
     if not last_user_msg:
@@ -58,6 +63,7 @@ async def decide_steps(state: PersonalState, config: RunnableConfig) -> Dict[str
     except (json.JSONDecodeError, ValueError):
         steps = []
 
+    logger.debug("decide_steps result: steps=%s", steps)
     return {"steps_needed": steps}
 
 
@@ -68,6 +74,8 @@ async def decide_steps(state: PersonalState, config: RunnableConfig) -> Dict[str
 # ---------------------------------------------------------------------------
 
 def pick_context_steps(state: PersonalState) -> List[str]:
+    logger.debug("pick_context_steps called")
+    log_state(logger, "pick_context_steps.input_state", state)
     step_map = {
         "video_capture":   "grab_video_frame",
         "web_search":      "fetch_web_context",
@@ -75,7 +83,9 @@ def pick_context_steps(state: PersonalState) -> List[str]:
     }
     steps_needed = state.get("steps_needed", [])
     selected     = [step_map[s] for s in steps_needed if s in step_map]
-    return selected if selected else ["call_llm"]
+    chosen = selected if selected else ["call_llm"]
+    logger.debug("pick_context_steps chosen=%s", chosen)
+    return chosen
 
 
 # ---------------------------------------------------------------------------
@@ -83,8 +93,11 @@ def pick_context_steps(state: PersonalState) -> List[str]:
 # ---------------------------------------------------------------------------
 
 async def grab_video_frame(state: PersonalState, config: RunnableConfig) -> Dict[str, Any]:
+    logger.debug("grab_video_frame called")
+    log_state(logger, "grab_video_frame.input_state", state)
     frame = video_buffer.latest()
     if frame is None:
+        logger.debug("grab_video_frame: no frame available")
         return {"messages": [HumanMessage(content=[{"type": "text", "text": "No camera frame available right now."}])]}
 
     b64      = base64.b64encode(frame).decode("ascii")
@@ -101,6 +114,8 @@ async def grab_video_frame(state: PersonalState, config: RunnableConfig) -> Dict
 # ---------------------------------------------------------------------------
 
 async def fetch_web_context(state: PersonalState, config: RunnableConfig) -> Dict[str, Any]:
+    logger.debug("fetch_web_context called")
+    log_state(logger, "fetch_web_context.input_state", state)
     # TODO: run web_search(last user message) and inject results as a SystemMessage
     return {}
 
@@ -111,6 +126,8 @@ async def fetch_web_context(state: PersonalState, config: RunnableConfig) -> Dic
 # ---------------------------------------------------------------------------
 
 async def fetch_doc_context(state: PersonalState, config: RunnableConfig) -> Dict[str, Any]:
+    logger.debug("fetch_doc_context called")
+    log_state(logger, "fetch_doc_context.input_state", state)
     # TODO: run document_search(last user message) and inject results as a SystemMessage
     return {}
 
@@ -121,6 +138,8 @@ async def fetch_doc_context(state: PersonalState, config: RunnableConfig) -> Dic
 # ---------------------------------------------------------------------------
 
 def join_context(state: PersonalState) -> PersonalState:
+    logger.debug("join_context called")
+    log_state(logger, "join_context.input_state", state)
     return state
 
 
@@ -133,6 +152,8 @@ async def call_llm(state: PersonalState, config: RunnableConfig) -> Dict[str, An
     thread_id = config.get("configurable", {}).get("thread_id", "")
     messages  = list(state.get("messages", []))
     summary   = state.get("summary", "")
+    logger.info("call_llm: thread=%s summary_len=%d messages=%d", thread_id, len(summary) if summary else 0, len(messages))
+    log_state(logger, "call_llm.input_state", state)
 
     # Build prompt: system message, optional summary, then recent history
     prompt: List[Any] = [SystemMessage(content=SYSTEM_PROMPT)]
@@ -143,6 +164,8 @@ async def call_llm(state: PersonalState, config: RunnableConfig) -> Dict[str, An
     response         = await _llm_with_tools.ainvoke(prompt, config=config)
     content          = response.content if isinstance(response.content, str) else ""
     assistant_msg_id = await save_message_idempotent(thread_id, "assistant", content)
+
+    logger.debug("call_llm: assistant_msg_id=%s response_tool_calls=%s", assistant_msg_id, getattr(response, "tool_calls", None))
 
     for tc in getattr(response, "tool_calls", []) or []:
         await save_tool_call(message_id=assistant_msg_id, call_id=tc.get("id", ""), tool_input=tc)
@@ -159,6 +182,8 @@ async def call_llm(state: PersonalState, config: RunnableConfig) -> Dict[str, An
 # ---------------------------------------------------------------------------
 
 def what_next(state: PersonalState) -> str:
+    logger.debug("what_next called")
+    log_state(logger, "what_next.input_state", state)
     messages = list(state.get("messages", []))
     if not messages:
         return "done"
@@ -176,6 +201,8 @@ def what_next(state: PersonalState) -> str:
 # ---------------------------------------------------------------------------
 
 async def run_tools(state: PersonalState, config: RunnableConfig) -> Dict[str, Any]:
+    logger.debug("run_tools called")
+    log_state(logger, "run_tools.input_state", state)
     messages   = list(state.get("messages", []))
     last_msg   = messages[-1] if messages else None
     tool_calls = getattr(last_msg, "tool_calls", None) if last_msg else None
@@ -190,6 +217,7 @@ async def run_tools(state: PersonalState, config: RunnableConfig) -> Dict[str, A
         if assistant_msg_id:
             await save_tool_result(message_id=assistant_msg_id, call_id=tm.tool_call_id, output=tm.content)
 
+    logger.debug("run_tools: produced %d tool messages", len(tool_messages))
     return {"messages": tool_messages}
 
 
@@ -199,6 +227,8 @@ async def run_tools(state: PersonalState, config: RunnableConfig) -> Dict[str, A
 # ---------------------------------------------------------------------------
 
 async def compress_history(state: PersonalState, config: RunnableConfig) -> Dict[str, Any]:
+    logger.debug("compress_history called")
+    log_state(logger, "compress_history.input_state", state)
     existing_summary = state.get("summary", "")
     messages         = list(state.get("messages", []))
 
@@ -210,6 +240,7 @@ async def compress_history(state: PersonalState, config: RunnableConfig) -> Dict
 
     prompt   = SUMMARY_PROMPT.format(existing_summary=existing_summary or "None yet.", new_messages=msg_text)
     response = await get_llm().ainvoke([HumanMessage(content=prompt)])
+    logger.debug("compress_history: produced summary_len=%d", len(response.content) if response and getattr(response, 'content', None) else 0)
     return {"summary": response.content}
 
 

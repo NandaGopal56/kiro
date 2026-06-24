@@ -11,6 +11,9 @@ from agents.shared.checkpointer import load_previous_state, merge_with_new_messa
 
 from agents.base import BaseAgent
 from agents.shared.models import get_classifier_llm
+from shared.logging import get_logger, log_state
+
+logger = get_logger("agents.supervisor", log_file="supervisor.log")
 
 from .prompts import CLARIFICATION_PREFIX, ROUTER_PROMPT
 from .state import SupervisorState
@@ -32,6 +35,8 @@ def make_route_request(agents: Dict[str, BaseAgent], parent_graph=None):
 
     async def route_request(state: SupervisorState, config: RunnableConfig) -> Dict[str, Any]:
         user_input = state.get("user_input", "")
+        logger.info("route_request called thread=%s user_input_preview=%s", config.get("configurable", {}).get("thread_id", ""), (user_input[:200] + "...") if len(user_input) > 200 else user_input)
+        log_state(logger, "route_request.input_state", state)
         thread_id = config.get("configurable", {}).get("thread_id", "") or state.get("thread_id", "")
 
         # Save user message to database
@@ -88,7 +93,11 @@ def make_route_request(agents: Dict[str, BaseAgent], parent_graph=None):
         except Exception:
             previous_supervisor_state = None
 
-        print(f"DEBUG: route_request previous_agent_state_present={bool(previous_agent_state)} previous_supervisor_state_present={bool(previous_supervisor_state)}")
+        logger.debug(
+            "route_request previous_agent_state_present=%s previous_supervisor_state_present=%s",
+            bool(previous_agent_state),
+            bool(previous_supervisor_state),
+        )
 
         # Merge precedence: supervisor state (most recent) overrides agent DB.
         # Start with agent DB state, then overlay supervisor state, then add
@@ -98,7 +107,10 @@ def make_route_request(agents: Dict[str, BaseAgent], parent_graph=None):
         new_state_values = {"messages": all_messages, "thread_id": thread_id}
         merged_agent_state = merge_with_new_messages(merged_with_supervisor, new_state_values)
 
-        print(f"DEBUG: route_request merged_messages_count={len(merged_agent_state.get('messages', [])) if merged_agent_state else 0}")
+        logger.debug(
+            "route_request merged_messages_count=%d",
+            len(merged_agent_state.get("messages", [])) if merged_agent_state else 0,
+        )
 
         result = {
             "chosen_agent": chosen,
@@ -128,6 +140,9 @@ async def ask_user(state: SupervisorState, config: RunnableConfig) -> Dict[str, 
     question = state.get("clarification_question", "Could you give me more details?")
     message = CLARIFICATION_PREFIX + question
 
+    logger.info("ask_user: thread=%s question=%s", thread_id, question)
+    log_state(logger, "ask_user.input_state", state)
+
     await save_message_idempotent(thread_id, "assistant", message)
 
     return {
@@ -137,6 +152,7 @@ async def ask_user(state: SupervisorState, config: RunnableConfig) -> Dict[str, 
 
 
 def what_to_do(state: SupervisorState) -> str:
+    logger.debug("what_to_do called needs_clarification=%s chosen_agent=%s", state.get("needs_clarification", False), state.get("chosen_agent"))
     if state.get("needs_clarification", False):
         return "ask_user"
     return state.get("chosen_agent", "personal")

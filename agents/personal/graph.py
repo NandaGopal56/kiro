@@ -8,6 +8,9 @@ from langgraph.types import RunnableConfig
 
 from agents.base import AgentInfo, BaseAgent
 from agents.shared.checkpointer import get_checkpointer, load_previous_state, merge_with_new_messages
+from shared.logging import get_logger
+
+logger = get_logger("agents.personal.graph", log_file="personal.log")
 
 from .nodes import (
     call_llm,
@@ -83,7 +86,7 @@ def build_personal_graph(checkpointer=None):
     g.add_edge("compress_history", END)
 
     if checkpointer is not None:
-        print(f"DEBUG: build_personal_graph using provided checkpointer -> {repr(checkpointer)}")
+        logger.debug("build_personal_graph using provided checkpointer -> %r", repr(checkpointer))
     graph = g.compile(checkpointer=checkpointer)
     return graph
 

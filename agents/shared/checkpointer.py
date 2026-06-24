@@ -14,6 +14,9 @@ from typing import Any, Dict, Optional
 
 import aiosqlite
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from shared.logging import get_logger, log_state
+
+logger = get_logger("agents.shared.checkpointer", log_file="checkpointer.log")
 
 
 # Shared event loop for bootstrapping AsyncSqliteSaver from sync get_checkpointer()
@@ -67,7 +70,7 @@ def get_checkpointer(agent_id: str) -> AsyncSqliteSaver:
 
         async def logged_aput(config, checkpoint, metadata, new_versions):
             tid = config.get("configurable", {}).get("thread_id")
-            print(f"DEBUG: saver.aput agent={agent_id} thread={tid} checkpoint_id={checkpoint.get('id')}")
+            logger.debug("saver.aput agent=%s thread=%s checkpoint_id=%s", agent_id, tid, checkpoint.get("id"))
             return await orig_aput(config, checkpoint, metadata, new_versions)
 
         saver.aput = logged_aput  # type: ignore[attr-defined]
@@ -79,7 +82,13 @@ def get_checkpointer(agent_id: str) -> AsyncSqliteSaver:
 
         async def logged_aput_writes(config, writes, task_id, task_path: str = ""):
             tid = config.get("configurable", {}).get("thread_id")
-            print(f"DEBUG: saver.aput_writes agent={agent_id} thread={tid} writes={len(writes)} task_id={task_id}")
+            logger.debug(
+                "saver.aput_writes agent=%s thread=%s writes=%d task_id=%s",
+                agent_id,
+                tid,
+                len(writes),
+                task_id,
+            )
             return await orig_aput_writes(config, writes, task_id, task_path)
 
         saver.aput_writes = logged_aput_writes  # type: ignore[attr-defined]
@@ -117,12 +126,12 @@ async def load_previous_state(
         cfg = RunnableConfig(configurable={"thread_id": thread_id})
         state = await graph.aget_state(cfg)
         found = bool(state and state.values)
-        print(f"DEBUG: checkpointer.load_previous_state agent={agent_id} thread={thread_id} found={found}")
+        logger.debug("checkpointer.load_previous_state agent=%s thread=%s found=%s", agent_id, thread_id, found)
         if state and state.values:
             return dict(state.values)
         return None
     except Exception as e:
-        print(f"Warning: Failed to load previous state for agent={agent_id}, thread={thread_id}: {e}")
+        logger.warning("Failed to load previous state for agent=%s, thread=%s: %s", agent_id, thread_id, e)
         return None
 
 
@@ -153,11 +162,15 @@ def merge_with_new_messages(
         Dict: The merged state ready for graph execution
     """
     if previous_state is None:
-        print(f"DEBUG: merge_with_new_messages previous=None new_messages={len(new_state_values.get('messages', []))}")
+        logger.debug("merge_with_new_messages previous=None new_messages=%d", len(new_state_values.get("messages", [])))
         return new_state_values
     
     merged = dict(previous_state)
-    print(f"DEBUG: merge_with_new_messages previous_messages={len(previous_state.get('messages', []))} new_messages={len(new_state_values.get('messages', []))}")
+    logger.debug(
+        "merge_with_new_messages previous_messages=%d new_messages=%d",
+        len(previous_state.get("messages", [])),
+        len(new_state_values.get("messages", [])),
+    )
     
     # Merge messages specially: keep all old messages, add new ones
     previous_messages = previous_state.get("messages", [])
@@ -178,7 +191,11 @@ def merge_with_new_messages(
         
         # Combine: old messages + unique new messages
         merged["messages"] = list(previous_messages) + unique_new_messages
-        print(f"DEBUG: merge_with_new_messages added_unique_new={len(unique_new_messages)} total_messages={len(merged['messages'])}")
+        logger.debug(
+            "merge_with_new_messages added_unique_new=%d total_messages=%d",
+            len(unique_new_messages),
+            len(merged["messages"]),
+        )
     else:
         merged["messages"] = list(previous_messages)
     

@@ -5,6 +5,9 @@ import asyncio
 from dataclasses import dataclass
 
 from agents.client import gateway
+from shared.logging import get_logger, log_state
+
+logger = get_logger("agents.test", log_file="agents_test.log")
 
 
 @dataclass(frozen=True)
@@ -22,10 +25,12 @@ CASES = (
 
 
 async def run_case(case: SmokeCase) -> None:
-    print(f"\n== {case.agent} ==")
+    logger.info("Running smoke case: %s", case)
     result = await gateway.invoke(case.agent, case.message, thread_id=case.thread_id)
+    log_state(logger, "smoke_case.response", {"agent": case.agent, "response_preview": (result[:400] + "...") if len(result) > 400 else result})
     assert result.strip(), f"{case.agent} returned an empty response"
-    print(result)
+    logger.info("Smoke case passed for %s (thread=%s)", case.agent, case.thread_id)
+    logger.info("Smoke case result: %s", (result[:1000] + "...") if len(result) > 1000 else result)
 
 
 async def main() -> None:
@@ -45,7 +50,7 @@ async def main() -> None:
     for case in selected:
         await run_case(case)
 
-    print("\nAll smoke tests passed.")
+    logger.info("All smoke tests passed.")
 
 
 if __name__ == "__main__":

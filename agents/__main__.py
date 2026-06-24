@@ -8,6 +8,9 @@ from dotenv import load_dotenv
 
 from agents.client import gateway
 from agents.shared.storage import create_thread, init_db
+from shared.logging import get_logger, log_state
+
+logger = get_logger("agents.__main__", log_file="supervisor.log")
 
 load_dotenv()
 
@@ -27,6 +30,7 @@ async def invoke_conversation(
     thread_id: str = "1",
     agent_name: str = "supervisor",
 ) -> AsyncGenerator[str, None]:
+    logger.info("invoke_conversation called: agent=%s thread=%s message_summary=%s", agent_name, thread_id, (message[:200] + "...") if len(message) > 200 else message)
     response_text = await gateway.invoke(
         agent_name=agent_name,
         task=message,
@@ -43,35 +47,39 @@ async def cli_chat(
 ) -> None:
     await init_db()
     gateway.save_graphs()
+    logger.info("Starting CLI chat: agent=%s thread=%s", agent_name, thread_id)
     if thread_id == "1":
         thread_id = str(await create_thread("CLI session"))
 
     agents = gateway.registered_agents()
-    print("Live Chat")
-    print(f"Mode: {agent_name}")
-    print("Agents: " + ", ".join(agents.keys()))
-    print(f"Thread ID: {thread_id}")
-    print("Type 'exit' to quit.\n")
+    logger.info("Live Chat")
+    logger.info("Mode: %s", agent_name)
+    logger.info("Agents: %s", ", ".join(agents.keys()))
+    logger.info("Thread ID: %s", thread_id)
+    logger.info("Type 'exit' to quit.")
 
     while True:
         try:
             user_input = input("You: ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\nGoodbye.")
+            logger.info("CLI chat interrupted by user")
+            logger.info("Goodbye.")
             break
 
         if not user_input:
             continue
         if user_input.lower() in {"exit", "quit"}:
-            print("Goodbye.")
+            logger.info("CLI chat exit requested")
+            logger.info("Goodbye.")
             break
 
-        print("Assistant: ", end="", flush=True)
-
+        logger.debug("User input received: %s", user_input)
+        response_accum = ""
         async for word in invoke_conversation(user_input, thread_id, agent_name):
-            print(word, end="", flush=True)
+            response_accum += word
 
-        print("\n")
+        logger.info("Assistant response (agent=%s thread=%s): %s", agent_name, thread_id, response_accum)
+        logger.debug("Finished streaming response for input")
 
 
 def main() -> None:
@@ -95,12 +103,17 @@ def main() -> None:
         asyncio.run(cli_chat(agent_name=args.agent, thread_id=args.thread_id))
     else:
         async def _run_message() -> None:
+            logger.info("Running single-message invocation: agent=%s message=%s", args.agent, args.message)
+            response_accum = ""
             async for token in invoke_conversation(
                 args.message,
                 thread_id=args.thread_id,
                 agent_name=args.agent,
             ):
-                print(token, end="", flush=True)
+                # accumulate tokens and log at the end for non-interactive mode
+                response_accum += token
+
+            logger.info("Invocation result (agent=%s thread=%s): %s", args.agent, args.thread_id, response_accum)
 
         asyncio.run(_run_message())
 

@@ -4,6 +4,10 @@ import abc
 from typing import Any, AsyncIterator, Dict, Optional
 
 from langgraph.types import RunnableConfig
+from shared.logging import get_logger, log_state
+
+
+logger = get_logger("agents.base", log_file="agents_base.log")
 
 
 class AgentInfo:
@@ -49,6 +53,20 @@ class BaseAgent(abc.ABC):
         Use this for standard request/response interactions.
         """
         ...
+
+
+def log_agent_call(agent: "BaseAgent", task: str, thread_id: str, context: Optional[Dict[str, Any]] = None) -> None:
+    """Utility helper to log agent invocation start state.
+
+    Callers (or agent implementations) can call this before heavy operations.
+    """
+    try:
+        name = getattr(agent, "__class__", type(agent)).__name__
+    except Exception:
+        name = str(agent)
+    a_logger = get_logger(f"agent.{name.lower()}", log_file=f"{name.lower()}.log")
+    a_logger.info("Starting agent: %s thread=%s", name, thread_id)
+    log_state(a_logger, "agent.start_state", {"task": task, "context": context})
 
     @abc.abstractmethod
     async def stream(
