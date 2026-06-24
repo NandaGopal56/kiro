@@ -1,44 +1,41 @@
-# agents/deep_research/planner.py
-#
-# Plain async functions — not LangGraph nodes — so they can be called from
-# a node, tested in isolation, or reused elsewhere easily.
-
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agents.shared.models import get_llm
-
 from .prompts import PLANNER_PROMPT, PLANNER_REVISE_PROMPT
 
 
 @dataclass
 class ResearchPlan:
-    """The output of the planner."""
+    """Structured research plan produced by the planner."""
+
     goal: str
     steps: List[str] = field(default_factory=list)
     done_when: str = ""
 
     def step_list(self) -> str:
-        """Return steps as a numbered string for prompts / display."""
-        return "\n".join(f"  {i + 1}. {s}" for i, s in enumerate(self.steps))
+        """Return steps as a numbered list string for display / prompts."""
+        return "\n".join(f"{i + 1}. {step}" for i, step in enumerate(self.steps))
 
 
 async def make_plan(goal: str) -> ResearchPlan:
-    """
-    Ask the LLM to break the research goal into ordered sub-questions.
-    Falls back gracefully if the LLM returns malformed JSON.
+    """Generate a research plan for the given confirmed goal.
+
+    Falls back to a minimal two-step plan if the LLM output cannot be parsed.
     """
     llm = get_llm(strong=True)
 
-    response = await llm.ainvoke([
-        SystemMessage(content=PLANNER_PROMPT),
-        HumanMessage(content=f"Research goal: {goal}"),
-    ])
+    response = await llm.ainvoke(
+        [
+            SystemMessage(content=PLANNER_PROMPT),
+            HumanMessage(content=f"Research goal: {goal}"),
+        ]
+    )
 
     data = _parse_plan_json(response.content)
     if data is None:
@@ -52,9 +49,9 @@ async def make_plan(goal: str) -> ResearchPlan:
         )
 
     return ResearchPlan(
-        goal=data.get("goal", goal),
-        steps=data.get("steps", [goal]),
-        done_when=data.get("done_when", ""),
+        goal=goal,
+        steps=data.get("steps", [f"Research: {goal}"]),
+        done_when=data.get("done_when", "The goal is fully answered with supporting evidence."),
     )
 
 
@@ -64,45 +61,50 @@ async def revise_plan(
     done_when: str,
     revision_notes: str,
 ) -> ResearchPlan:
-    """
-    Edit the EXISTING plan in place based on the user's revision feedback.
-    Only changes steps the feedback calls for; keeps the rest word-for-word.
-    Falls back to the existing plan unchanged if the LLM returns bad JSON,
-    so a parsing hiccup never silently drops the user's plan.
+    """Revise an existing plan in place based on user feedback.
+
+    Unaffected steps should remain unchanged. If parsing fails, the original
+    plan is returned unchanged.
     """
     llm = get_llm(strong=True)
 
-    existing_steps_text = "\n".join(f"  {i + 1}. {s}" for i, s in enumerate(existing_steps))
+    existing_steps_text = "\n".join(
+        f"{i + 1}. {step}" for i, step in enumerate(existing_steps)
+    )
 
-    response = await llm.ainvoke([
-        SystemMessage(content=PLANNER_REVISE_PROMPT.format(
-            goal=goal,
-            existing_steps=existing_steps_text,
-            done_when=done_when,
-            revision_notes=revision_notes,
-        )),
-        HumanMessage(content="Revise the plan now, returning the full revised step list."),
-    ])
+    response = await llm.ainvoke(
+        [
+            SystemMessage(
+                content=PLANNER_REVISE_PROMPT.format(
+                    goal=goal,
+                    existing_steps=existing_steps_text,
+                    done_when=done_when,
+                    revision_notes=revision_notes,
+                )
+            ),
+            HumanMessage(content="Revise the plan and return the full updated plan as JSON."),
+        ]
+    )
 
     data = _parse_plan_json(response.content)
     if data is None:
-        # Keep existing plan intact rather than losing it on a bad parse.
         return ResearchPlan(goal=goal, steps=existing_steps, done_when=done_when)
 
     return ResearchPlan(
-        goal=data.get("goal", goal),
+        goal=goal,
         steps=data.get("steps", existing_steps),
         done_when=data.get("done_when", done_when),
     )
 
 
-def _parse_plan_json(raw: str):
-    """Parse JSON from LLM output, stripping markdown fences if present.
-    Returns None on failure so callers apply their own fallback."""
+def _parse_plan_json(raw: str) -> Optional[dict]:
+    """Parse planner JSON output, tolerating fenced markdown."""
     try:
         text = raw.strip()
         if text.startswith("```"):
-            text = text.split("```")[1]
+            parts = text.split("```")
+            if len(parts) >= 2:
+                text = parts[1]
             if text.startswith("json"):
                 text = text[4:]
         return json.loads(text.strip())

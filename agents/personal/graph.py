@@ -7,12 +7,12 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import RunnableConfig
 
 from agents.base import AgentInfo, BaseAgent
-from agents.shared.checkpointer import get_checkpointer, load_previous_state, merge_with_new_messages
-from shared.logging import get_logger
-
-logger = get_logger("agents.personal.graph", log_file="personal.log")
-
-from .nodes import (
+from agents.shared.checkpointer import (
+    get_checkpointer, 
+    load_previous_state, 
+    merge_with_new_messages
+)
+from agents.personal.nodes import (
     call_llm,
     compress_history,
     decide_steps,
@@ -24,7 +24,10 @@ from .nodes import (
     run_tools,
     what_next,
 )
-from .state import PersonalState
+from agents.personal.state import PersonalState
+from shared.logging import get_logger
+
+logger = get_logger("agents.personal.graph", log_file="personal.log")
 
 
 def build_personal_graph(checkpointer=None):
