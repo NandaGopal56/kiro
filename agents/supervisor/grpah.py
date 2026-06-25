@@ -18,22 +18,6 @@ DEBUG_MODE = True
 logger = get_logger("agents.supervisor", log_file="supervisor.log")
 
 
-def _log_state(node_name: str, state: Dict[str, Any]) -> None:
-    """Log the full state at node entry using shared logging."""
-    if not DEBUG_MODE:
-        return
-    safe = {}
-    for k, v in state.items():
-        if isinstance(v, str) and len(v) > 500:
-            safe[k] = v[:500] + f"... [truncated, total={len(v)}]"
-        elif k == "messages":
-            safe[k] = f"[{len(v) if hasattr(v, '__len__') else '?'} messages]"
-        else:
-            safe[k] = v
-    logger.debug("NODE ENTRY: %s", node_name)
-    log_state(logger, f"supervisor.node.{node_name}.input_state", safe)
-
-
 def build_supervisor_graph(agents: Dict[str, BaseAgent]):
     """Build and compile the supervisor's LangGraph."""
     logger.info("Building supervisor graph for agents: %s", list(agents.keys()))

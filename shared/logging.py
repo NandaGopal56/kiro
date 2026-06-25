@@ -49,10 +49,10 @@ def get_logger(name: str, log_file: Optional[str] = None, level: int = logging.D
     logger.addHandler(fh)
 
     # Also add a console handler for INFO+ so developers see runtime feedback
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(formatter)
-    logger.addHandler(ch)
+    # ch = logging.StreamHandler()
+    # ch.setLevel(logging.INFO)
+    # ch.setFormatter(formatter)
+    # logger.addHandler(ch)
 
     # Make log file path available on the logger for callers
     logger.log_file_path = str(path)  # type: ignore[attr-defined]

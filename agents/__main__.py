@@ -45,8 +45,13 @@ async def cli_chat(
     agent_name: str = "supervisor",
     thread_id: str = "1",
 ) -> None:
-    await init_db()
-    gateway.save_graphs()
+    
+    # Initialize the database and create a new thread for the CLI session if needed
+    # await init_db()
+
+    # save_graphs() is commented out to avoid saving graphs everytime, as it may not be necessary always.
+    # gateway.save_graphs()
+
     logger.info("Starting CLI chat: agent=%s thread=%s", agent_name, thread_id)
     if thread_id == "1":
         thread_id = str(await create_thread("CLI session"))
@@ -78,6 +83,7 @@ async def cli_chat(
         async for word in invoke_conversation(user_input, thread_id, agent_name):
             response_accum += word
 
+        print(f'{agent_name} Agent: {response_accum}', end='\n\n')
         logger.info("Assistant response (agent=%s thread=%s): %s", agent_name, thread_id, response_accum)
         logger.debug("Finished streaming response for input")
 
