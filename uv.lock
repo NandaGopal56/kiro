@@ -4745,6 +4745,7 @@ dependencies = [
     { name = "ipykernel" },
     { name = "ipynb" },
     { name = "langgraph-checkpoint-sqlite" },
+    { name = "sarvamai" },
     { name = "tavily" },
 ]
 
@@ -4962,6 +4963,7 @@ requires-dist = [
     { name = "rank-bm25", marker = "extra == 'all'", specifier = ">=0.2.2" },
     { name = "rank-bm25", marker = "extra == 'context'", specifier = ">=0.2.2" },
     { name = "rank-bm25", marker = "extra == 'dev'", specifier = ">=0.2.2" },
+    { name = "sarvamai", specifier = ">=0.1.28" },
     { name = "sarvamai", marker = "extra == 'all'", specifier = ">=0.1.0" },
     { name = "sarvamai", marker = "extra == 'dev'", specifier = ">=0.1.0" },
     { name = "sarvamai", marker = "extra == 'stt'", specifier = ">=0.1.0" },
