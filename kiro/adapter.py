@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import sys
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -29,48 +31,106 @@ class InputEvent:
         return f"[{self.modality.value}] {self.text!r}"
 
 
+class TextInputSource:
+    """Yield text prompts from a predefined list of lines or from stdin."""
+
+    def __init__(self, text_lines: Optional[list[str]] = None, language: Optional[str] = None) -> None:
+        self.text_lines = text_lines
+        self.language = language
+
+    async def stream(self) -> AsyncIterator[InputEvent]:
+        if self.text_lines is not None:
+            for text in self.text_lines:
+                if not text:
+                    continue
+                yield InputEvent(
+                    text=text,
+                    modality=Modality.TEXT,
+                    language=self.language,
+                    metadata={"source": "text"},
+                )
+                await asyncio.sleep(0)
+            return
+
+        while True:
+            try:
+                prompt = "input> "
+                text = await asyncio.to_thread(input, prompt)
+            except EOFError:
+                break
+
+            stripped = text.strip()
+            if not stripped:
+                continue
+
+            yield InputEvent(
+                text=stripped,
+                modality=Modality.TEXT,
+                language=self.language,
+                metadata={"source": "text"},
+            )
+
+
 class SpeechToAgentAdapter:
-    """Bridge STT output into agent invocations without coupling modules."""
+    """Bridge STT or text input into agent invocations without coupling modules."""
 
     def __init__(
         self,
-        stt_engine: "STTEngine",
+        stt_engine: Optional["STTEngine"],
         agent_gateway: "AgentGateway",
         agent_name: str = "supervisor",
         thread_id: str = "1",
         language: Optional[str] = None,
+        input_source: Optional[AsyncIterator[InputEvent] | TextInputSource] = None,
     ) -> None:
         self.stt_engine = stt_engine
         self.agent_gateway = agent_gateway
         self.agent_name = agent_name
         self.thread_id = thread_id
         self.language = language
+        self.input_source = input_source
 
     async def listen_and_respond(self) -> AsyncIterator[tuple[InputEvent, str]]:
-        async for item in self.stt_engine.stream():
-            if isinstance(item, InputEvent):
+        stream_source = self.input_source
+        if stream_source is None:
+            if self.stt_engine is None:
+                raise ValueError("Either an STT engine or input_source must be provided")
+            stream_source = self.stt_engine.stream()
+
+        if isinstance(stream_source, TextInputSource):
+            async for item in stream_source.stream():
                 event = item
-            else:
-                event = InputEvent(
-                    text=str(item),
-                    modality=Modality.AUDIO,
-                    language=self.language,
-                    metadata={"source": "stt"},
-                )
+                await self._handle_event(event)
+                yield event, await self._invoke_agent(event)
+        else:
+            async for item in stream_source:
+                if isinstance(item, InputEvent):
+                    event = item
+                else:
+                    event = InputEvent(
+                        text=str(item),
+                        modality=Modality.AUDIO,
+                        language=self.language,
+                        metadata={"source": "stt"},
+                    )
 
-            if event.language is None and self.language is not None:
-                event.language = self.language
-            if not event.metadata.get("source"):
-                event.metadata["source"] = "stt"
+                await self._handle_event(event)
+                yield event, await self._invoke_agent(event)
 
-            response = await self.agent_gateway.invoke(
-                agent_name=self.agent_name,
-                task=event.text,
-                thread_id=self.thread_id,
-                context={"input_event": event},
-            )
-            yield event, response
+    async def _handle_event(self, event: InputEvent) -> None:
+        if event.language is None and self.language is not None:
+            event.language = self.language
+        if not event.metadata.get("source"):
+            event.metadata["source"] = "stt"
+
+    async def _invoke_agent(self, event: InputEvent) -> str:
+        return await self.agent_gateway.invoke(
+            agent_name=self.agent_name,
+            task=event.text,
+            thread_id=self.thread_id,
+            context={"input_event": event},
+        )
 
     async def close(self) -> None:
-        if hasattr(self.stt_engine, "close"):
+        if self.stt_engine is not None and hasattr(self.stt_engine, "close"):
             await self.stt_engine.close()

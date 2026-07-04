@@ -4740,12 +4740,16 @@ wheels = [
 [[package]]
 name = "rag"
 version = "0.1.0"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "ipykernel" },
     { name = "ipynb" },
+    { name = "langchain-openai" },
+    { name = "langgraph" },
     { name = "langgraph-checkpoint-sqlite" },
+    { name = "python-dotenv" },
     { name = "sarvamai" },
+    { name = "sounddevice" },
     { name = "tavily" },
 ]
 
@@ -4911,6 +4915,7 @@ requires-dist = [
     { name = "langchain-experimental", marker = "extra == 'all'", specifier = ">=0.4.1" },
     { name = "langchain-experimental", marker = "extra == 'context'", specifier = ">=0.4.1" },
     { name = "langchain-experimental", marker = "extra == 'dev'", specifier = ">=0.4.1" },
+    { name = "langchain-openai", specifier = ">=1.1.7" },
     { name = "langchain-openai", marker = "extra == 'agents'", specifier = ">=1.1.7" },
     { name = "langchain-openai", marker = "extra == 'all'", specifier = ">=1.1.7" },
     { name = "langchain-openai", marker = "extra == 'context'", specifier = ">=1.1.7" },
@@ -4918,6 +4923,7 @@ requires-dist = [
     { name = "langchain-text-splitters", marker = "extra == 'all'", specifier = ">=1.1.0" },
     { name = "langchain-text-splitters", marker = "extra == 'context'", specifier = ">=1.1.0" },
     { name = "langchain-text-splitters", marker = "extra == 'dev'", specifier = ">=1.1.0" },
+    { name = "langgraph", specifier = ">=1.0.7" },
     { name = "langgraph", marker = "extra == 'agents'", specifier = ">=1.0.7" },
     { name = "langgraph", marker = "extra == 'all'", specifier = ">=1.0.7" },
     { name = "langgraph", marker = "extra == 'dev'", specifier = ">=1.0.7" },
@@ -4957,6 +4963,7 @@ requires-dist = [
     { name = "python-docx", marker = "extra == 'all'", specifier = ">=1.2.0" },
     { name = "python-docx", marker = "extra == 'context'", specifier = ">=1.2.0" },
     { name = "python-docx", marker = "extra == 'dev'", specifier = ">=1.2.0" },
+    { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "ragas", marker = "extra == 'all'", specifier = ">=0.4.3" },
     { name = "ragas", marker = "extra == 'context'", specifier = ">=0.4.3" },
     { name = "ragas", marker = "extra == 'dev'", specifier = ">=0.4.3" },
@@ -4976,6 +4983,7 @@ requires-dist = [
     { name = "simpleaudio", marker = "extra == 'all'", specifier = ">=1.0.4" },
     { name = "simpleaudio", marker = "extra == 'dev'", specifier = ">=1.0.4" },
     { name = "simpleaudio", marker = "extra == 'tts'", specifier = ">=1.0.4" },
+    { name = "sounddevice", specifier = ">=0.5.5" },
     { name = "sounddevice", marker = "extra == 'all'", specifier = ">=0.5.5" },
     { name = "sounddevice", marker = "extra == 'dev'", specifier = ">=0.5.5" },
     { name = "sounddevice", marker = "extra == 'stt'", specifier = ">=0.5.5" },
