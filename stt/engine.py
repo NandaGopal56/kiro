@@ -1,33 +1,22 @@
-"""
-STT engine: wraps a provider and emits InputEvent objects.
-
-This is the only STT surface the agent core should import. Swapping
-providers means constructing a different STTProvider; nothing downstream
-changes.
-"""
+"""STT engine that exposes provider transcripts to downstream adapters."""
 
 from __future__ import annotations
 
 from typing import AsyncIterator, Optional
 
-from stt.schema import InputEvent, Modality  # adjust to your actual schema path
 from stt.base import STTProvider
 
 
 class STTEngine:
-    """Adapts a provider's raw transcripts into InputEvent objects."""
+    """Wraps an STT provider and exposes raw transcript strings."""
 
     def __init__(self, provider: STTProvider, language: Optional[str] = None) -> None:
         self.provider = provider
         self.language = language
 
-    async def stream(self) -> AsyncIterator[InputEvent]:
+    async def stream(self) -> AsyncIterator[str]:
         async for transcript in self.provider.stream():
-            yield InputEvent(
-                text=transcript,
-                modality=Modality.AUDIO,
-                language=self.language,
-            )
+            yield transcript
 
     async def close(self) -> None:
         await self.provider.close()

@@ -19,9 +19,13 @@ include = [
     "context_engine*",
     "live_interaction*",
     "orchestrator*",
+    "shared*",
     "stt_audio_processor*",
     "tts_audio_processor*",
 ]
+
+[project.scripts]
+rag-adapter = "kiro.adapter_cli:main"
 
 [project.optional-dependencies]
 agents = [
