@@ -8,7 +8,7 @@ import math
 import subprocess
 
 import requests
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from langchain_core.tools import tool
 from tavily import TavilyClient
 from shared.logging import get_logger
@@ -19,7 +19,7 @@ logger = get_logger("agents.shared.tools", log_file="tools.log")
 # Configuration
 # =============================================================================
 
-load_dotenv('/Users/nnandagopal/Desktop/personal_projects/RAG/.env')
+load_dotenv(find_dotenv())
 
 tavily_client = TavilyClient()
 

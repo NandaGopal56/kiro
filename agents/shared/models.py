@@ -4,9 +4,9 @@
 # Change model names or providers here and every agent picks it up.
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-load_dotenv('/Users/nnandagopal/Desktop/personal_projects/RAG/.env')
+load_dotenv(find_dotenv())
 
 CHAT_MODEL = "gpt-4o-mini"
 STRONG_CHAT_MODEL = "gpt-4o-mini"          # used by deep research for planning/reflection

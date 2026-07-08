@@ -16,9 +16,9 @@ import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import AsyncIterator, Optional
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-load_dotenv('/Users/nnandagopal/Desktop/personal_projects/RAG/.env')
+load_dotenv(find_dotenv())
 
 import sounddevice as sd
 from sarvamai import SarvamAI
