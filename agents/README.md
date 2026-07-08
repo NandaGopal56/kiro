@@ -1,6 +1,6 @@
 # Agents
 
-This package contains the agent runtime used by the RAG project.
+This package contains the agent runtime used by the Kiro project.
 It exposes one shared entry point for both direct agent calls and supervisor routing.
 
 ## Agents

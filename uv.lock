@@ -4738,7 +4738,7 @@ wheels = [
 ]
 
 [[package]]
-name = "rag"
+name = "kiro"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
