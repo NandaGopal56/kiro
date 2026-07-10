@@ -5,9 +5,13 @@ import asyncio
 import datetime as dt
 
 from agents.client import gateway
+from kiro.adapter import SpeechToAgentAdapter, TextInputSource
+from kiro.audio_player import AudioPlayer
+from kiro.microphone import KiroMicrophone
 from stt.engine import STTEngine
 from stt.providers.sarvam import SarvamSTT
-from kiro.adapter import SpeechToAgentAdapter, TextInputSource
+from tts.engine import TTSEngine
+from tts.providers.sarvam import SarvamTTS
 
 
 async def run_streaming(
@@ -16,6 +20,10 @@ async def run_streaming(
     language: str = "en-IN",
     input_mode: str = "audio",
 ) -> None:
+    tts_provider = SarvamTTS(language_code=language)
+    tts_engine = TTSEngine(tts_provider)
+    audio_player = None
+
     if input_mode == "text":
         adapter = SpeechToAgentAdapter(
             stt_engine=None,
@@ -24,17 +32,23 @@ async def run_streaming(
             thread_id=thread_id,
             language=language,
             input_source=TextInputSource(language=language),
+            tts_engine=tts_engine,
+            audio_player=audio_player,
         )
         print(f"Text input mode ({language}). Type a message and press Enter. Ctrl+C to stop")
     else:
-        provider = SarvamSTT(language_code=language)
+        microphone = KiroMicrophone()
+        provider = SarvamSTT(language_code=language, microphone=microphone)
         stt_engine = STTEngine(provider, language=language)
+        audio_player = AudioPlayer(microphone=stt_engine)
         adapter = SpeechToAgentAdapter(
             stt_engine=stt_engine,
             agent_gateway=gateway,
             agent_name=agent_name,
             thread_id=thread_id,
             language=language,
+            tts_engine=tts_engine,
+            audio_player=audio_player,
         )
         print(f"Listening for speech ({language})... Ctrl+C to stop")
 

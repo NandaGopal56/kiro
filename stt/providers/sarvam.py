@@ -20,17 +20,14 @@ from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
 
-import sounddevice as sd
 from sarvamai import SarvamAI
 from sarvamai.types.speech_to_text_transcription_data import (
     SpeechToTextTranscriptionData,
 )
 
 from stt.base import STTProvider
+from kiro.microphone import KiroMicrophone, SAMPLE_RATE, BLOCKSIZE
 
-SAMPLE_RATE = 16000
-FRAME_MS = 40
-BLOCKSIZE = SAMPLE_RATE * FRAME_MS // 1000
 MODEL = "saaras:v3"
 
 
@@ -42,6 +39,7 @@ class SarvamSTT(STTProvider):
         api_key: Optional[str] = None,
         language_code: str = "en-IN",
         model: str = MODEL,
+        microphone: Optional[KiroMicrophone] = None,
     ) -> None:
         self.api_key = api_key or os.environ["SARVAM_API_KEY"]
         self.language_code = language_code
@@ -51,23 +49,13 @@ class SarvamSTT(STTProvider):
         self._out_queue: asyncio.Queue[str] = asyncio.Queue()
         self._stop_event = threading.Event()
         self._executor = ThreadPoolExecutor(max_workers=1)
+        self._microphone = microphone or KiroMicrophone(sample_rate=SAMPLE_RATE, blocksize=BLOCKSIZE)
         self._executor.submit(self._run_sync)
 
     def _run_sync(self) -> None:
         """Runs entirely in a worker thread: mic capture + Sarvam sync ws."""
         client = SarvamAI(api_subscription_key=self.api_key)
-        audio_queue: "queue.Queue[bytes]" = queue.Queue()
-
-        def audio_callback(indata, frames, time_info, status):
-            audio_queue.put(bytes(indata))
-
-        stream = sd.InputStream(
-            samplerate=SAMPLE_RATE,
-            channels=1,
-            dtype="int16",
-            blocksize=BLOCKSIZE,
-            callback=audio_callback,
-        )
+        self._microphone.start()
 
         with client.speech_to_text_streaming.connect(
             model=self.model,
@@ -76,9 +64,8 @@ class SarvamSTT(STTProvider):
             high_vad_sensitivity=True,
             flush_signal=True,
         ) as ws:
-            stream.start()
             sender = threading.Thread(
-                target=self._sender_loop, args=(ws, audio_queue), daemon=True
+                target=self._sender_loop, args=(ws,), daemon=True
             )
             sender.start()
 
@@ -96,15 +83,13 @@ class SarvamSTT(STTProvider):
                             self._out_queue.put_nowait, transcript
                         )
             finally:
-                stream.stop()
-                stream.close()
+                self._microphone.stop()
 
-    def _sender_loop(self, ws, audio_queue: "queue.Queue[bytes]") -> None:
-        """Pulls captured audio chunks off the queue and forwards them."""
+    def _sender_loop(self, ws) -> None:
+        """Pulls captured audio chunks off the microphone queue and forwards them."""
         while not self._stop_event.is_set():
-            try:
-                chunk = audio_queue.get(timeout=0.5)
-            except queue.Empty:
+            chunk = self._microphone.get_audio_frame(timeout=0.5)
+            if not chunk:
                 continue
             ws.transcribe(
                 audio=base64.b64encode(chunk).decode(),
@@ -117,8 +102,18 @@ class SarvamSTT(STTProvider):
             transcript = await self._out_queue.get()
             yield transcript
 
+    async def pause(self) -> None:
+        self._microphone.pause()
+
+    async def resume(self) -> None:
+        self._microphone.resume()
+
+    def attach_microphone(self, microphone: KiroMicrophone) -> None:
+        self._microphone = microphone
+
     async def close(self) -> None:
         self._stop_event.set()
+        self._microphone.stop()
         self._executor.shutdown(wait=False)
 
 

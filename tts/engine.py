@@ -11,8 +11,8 @@ class TTSEngine:
     def __init__(self, provider: TTSProvider) -> None:
         self.provider = provider
 
-    async def speak(self, text: str) -> None:
-        await self.provider.speak(text)
+    async def speak(self, text: str) -> str:
+        return await self.provider.speak(text)
 
     async def close(self) -> None:
         await self.provider.close()

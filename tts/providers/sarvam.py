@@ -4,15 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-import tempfile
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv, find_dotenv
 import base64
-import io
-
-from pydub import AudioSegment
-from pydub.playback import play
 
 load_dotenv(find_dotenv()) 
 
@@ -34,8 +29,7 @@ class SarvamTTS(TTSProvider):
         if not os.environ.get("SARVAM_API_KEY"):
             raise ValueError("SARVAM_API_KEY is required for the Sarvam TTS provider")
 
-        self.client = SarvamAI(api_subscription_key=os.environ.get("SARVAM_API_KEY"))
-
+        self.client = SarvamAI()
         self.model = model
         self.speaker = speaker
         self.language_code = language_code
@@ -54,13 +48,13 @@ class SarvamTTS(TTSProvider):
 
         audio_bytes = base64.b64decode("".join(response.audios))
 
-        audio = AudioSegment.from_file(io.BytesIO(audio_bytes), format="wav")
-        play(audio)
+        return audio_bytes
 
-    async def speak(self, text: str) -> None:
+    async def speak(self, text: str) -> str:
         if not text.strip():
-            return
-        await asyncio.to_thread(self._speak_sync, text)
+            return ""
+        audio_bytes = await asyncio.to_thread(self._speak_sync, text)
+        return base64.b64encode(audio_bytes).decode("ascii")
 
     async def close(self) -> None:
         return None

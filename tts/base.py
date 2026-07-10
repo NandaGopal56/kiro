@@ -9,8 +9,8 @@ class TTSProvider(ABC):
     """Common interface all TTS providers must implement."""
 
     @abstractmethod
-    async def speak(self, text: str) -> None:
-        """Convert text to speech."""
+    async def speak(self, text: str) -> str:
+        """Convert text to speech and return base64-encoded audio bytes."""
         ...
 
     @abstractmethod
