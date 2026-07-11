@@ -12,30 +12,28 @@ from pydub.playback import play
 
 
 class MicrophoneController(Protocol):
-    async def pause(self) -> None: ...
-    async def resume(self) -> None: ...
+    """Anything that can be paused/resumed around playback (e.g. KiroMicrophone)."""
+
+    def pause(self) -> None: ...
+    def resume(self) -> None: ...
 
 
 class AudioPlayer:
+    """Plays base64-encoded audio, muting the mic for the duration of playback."""
+
     def __init__(self, microphone: Optional[MicrophoneController] = None):
         self.microphone = microphone
 
     async def play_b64(self, audio_b64: str) -> None:
-        # if self.microphone:
-        #     await self.microphone.pause()
+        if self.microphone is not None:
+            self.microphone.pause()
 
         try:
             audio_bytes = base64.b64decode(audio_b64)
-
-            audio = AudioSegment.from_file(
-                io.BytesIO(audio_bytes),
-                format="wav",
-            )
+            audio = AudioSegment.from_file(io.BytesIO(audio_bytes), format="wav")
 
             # pydub.playback.play() is blocking
             await asyncio.to_thread(play, audio)
-
         finally:
-            pass
-            # if self.microphone:
-            #     await self.microphone.resume()
+            if self.microphone is not None:
+                self.microphone.resume()

@@ -14,7 +14,7 @@ BLOCKSIZE = SAMPLE_RATE * FRAME_MS // 1000
 
 
 class KiroMicrophone:
-    """Capture microphone audio frames and optionally mute them during playback."""
+    """Capture microphone audio frames and mute them (drop, not zero-fill) during playback."""
 
     def __init__(
         self,
@@ -72,8 +72,12 @@ class KiroMicrophone:
         self._paused.clear()
 
     def queue_audio_frame(self, frame: bytes) -> None:
-        payload = b"" if self._paused.is_set() else frame
-        self._audio_queue.put(payload)
+        # While paused (e.g. TTS playback), drop frames instead of queuing
+        # silence — avoids piling empty frames into the queue for consumers
+        # to filter through.
+        if self._paused.is_set():
+            return
+        self._audio_queue.put(frame)
 
     def get_audio_frame(self, timeout: float = 0.5) -> bytes:
         try:

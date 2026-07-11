@@ -1,3 +1,4 @@
+#adapter_cli.py
 from __future__ import annotations
 
 import argparse
@@ -22,7 +23,6 @@ async def run_streaming(
 ) -> None:
     tts_provider = SarvamTTS(language_code=language)
     tts_engine = TTSEngine(tts_provider)
-    audio_player = None
 
     if input_mode == "text":
         adapter = SpeechToAgentAdapter(
@@ -33,14 +33,16 @@ async def run_streaming(
             language=language,
             input_source=TextInputSource(language=language),
             tts_engine=tts_engine,
-            audio_player=audio_player,
+            audio_player=None,
         )
         print(f"Text input mode ({language}). Type a message and press Enter. Ctrl+C to stop")
     else:
         microphone = KiroMicrophone()
         provider = SarvamSTT(language_code=language, microphone=microphone)
         stt_engine = STTEngine(provider, language=language)
-        audio_player = AudioPlayer(microphone=stt_engine)
+        # Wire the mic itself (not the STT engine) into the player so
+        # playback can pause/resume capture directly.
+        audio_player = AudioPlayer(microphone=microphone)
         adapter = SpeechToAgentAdapter(
             stt_engine=stt_engine,
             agent_gateway=gateway,
