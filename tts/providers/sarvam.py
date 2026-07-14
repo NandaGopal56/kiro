@@ -39,12 +39,14 @@ class SarvamTTS(TTSProvider):
 
     def _speak_sync(self, text: str) -> None:
 
+        print(f'Request sent to TTS model for audio generation')
         response = self.client.text_to_speech.convert(
             text=text,
             target_language_code=self.language_code,
             model=self.model,
             speaker=self.speaker,
         )
+        print(f'Audio generation completed, received audio data from TTS model')
 
         audio_bytes = base64.b64decode("".join(response.audios))
 
