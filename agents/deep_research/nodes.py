@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Dict, List, Optional
+from webbrowser import get
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.prebuilt import ToolNode
@@ -22,6 +23,7 @@ from agents.shared.logging import (
 )
 from agents.shared.models import get_llm
 from agents.shared.tools import research_tools
+from agents.shared.utils import get_formatted_recent_history
 
 from .planner import ResearchPlan, make_plan, revise_plan
 from .prompts import (
@@ -266,9 +268,15 @@ async def clarify_goal(state: ResearchState, config: RunnableConfig) -> Dict[str
             original_question=original_question,
         )
 
+        history_limit = 7
+        conversation_history = get_formatted_recent_history(state=state, max_messages=history_limit)
+
         response = await llm.ainvoke(
             [
-                SystemMessage(content=CLARIFIER_PROMPT),
+                SystemMessage(content=CLARIFIER_PROMPT.format(
+                    conversation_history=conversation_history,
+                    history_limit=history_limit
+                )),
                 HumanMessage(content=original_question),
             ]
         )
@@ -317,12 +325,17 @@ async def clarify_goal(state: ResearchState, config: RunnableConfig) -> Dict[str
         has_goal_revision_notes=bool(goal_revision_notes),
     )
 
+    history_limit = 7
+    conversation_history = get_formatted_recent_history(state=state, max_messages=history_limit)
+
     response = await llm.ainvoke(
         [
             SystemMessage(
                 content=GOAL_UPDATER_PROMPT.format(
                     original_question=original_question,
                     refined_goal=current_goal,
+                    conversation_history=conversation_history,
+                    history_limit=history_limit,
                     clarifying_questions="\n".join(
                         f"- {q}" for q in state.get("clarifying_questions", [])
                     ) or "(none)",
@@ -433,11 +446,17 @@ async def check_goal_confirmation(state: ResearchState, config: RunnableConfig) 
     )
 
     llm = get_llm(strong=True)
+
+    history_limit = 7
+    conversation_history = get_formatted_recent_history(state=state, max_messages=history_limit)
+
     response = await llm.ainvoke(
         [
             SystemMessage(
                 content=GOAL_CONFIRMATION_PROMPT.format(
                     goal=goal,
+                    conversation_history=conversation_history,
+                    history_limit=history_limit,
                     questions="\n".join(f"- {q}" for q in questions) or "(none)",
                     user_reply=user_reply_text,
                 )
@@ -528,6 +547,7 @@ async def create_plan(state: ResearchState, config: RunnableConfig) -> Dict[str,
             has_revision_notes=True,
         )
         plan: ResearchPlan = await revise_plan(
+            state=state,
             goal=planner_goal,
             existing_steps=existing_plan,
             done_when=done_when,
@@ -540,7 +560,7 @@ async def create_plan(state: ResearchState, config: RunnableConfig) -> Dict[str,
             existing_plan_len=len(existing_plan),
             has_revision_notes=bool(plan_revision_notes),
         )
-        plan = await make_plan(planner_goal)
+        plan = await make_plan(state=state, goal=planner_goal)
 
     _log_branch(
         "create_plan",
@@ -619,12 +639,18 @@ async def check_plan_confirmation(state: ResearchState, config: RunnableConfig) 
     )
 
     llm = get_llm(strong=True)
+
+    history_limit = 7
+    conversation_history = get_formatted_recent_history(state=state, max_messages=history_limit)
+
     response = await llm.ainvoke(
         [
             SystemMessage(
                 content=PLAN_CONFIRMATION_PROMPT.format(
                     goal=goal,
                     plan=plan_steps,
+                    conversation_history=conversation_history,
+                    history_limit=10,
                     user_reply=user_reply_text,
                 )
             ),

@@ -1,5 +1,8 @@
 CLARIFIER_PROMPT = """You are a research intake assistant.
 
+Recent conversation (most recent {history_limit} turns):
+{conversation_history}
+
 Your job:
 1. Understand the user's research request.
 2. Rewrite it as a clear research goal.
@@ -24,6 +27,9 @@ Return JSON only:
 
 
 GOAL_UPDATER_PROMPT = """You are a research goal refiner.
+
+Recent conversation (most recent {history_limit} turns):
+{conversation_history}
 
 Original question:
 {original_question}
@@ -64,6 +70,9 @@ Proposed research goal:
 Open clarification questions:
 {questions}
 
+Recent conversation (most recent {history_limit} turns):
+{conversation_history}
+
 User reply:
 {user_reply}
 
@@ -89,6 +98,9 @@ Return JSON only:
 
 PLANNER_PROMPT = """You are a research planner.
 
+Recent conversation (most recent {history_limit} turns):
+{conversation_history}
+
 Given a confirmed research goal, break it into 3-6 focused steps that together
 will fully answer the goal.
 
@@ -112,6 +124,9 @@ Return JSON only:
 
 
 PLANNER_REVISE_PROMPT = """You are a research planner revising an existing plan.
+
+Recent conversation (most recent {history_limit} turns):
+{conversation_history}
 
 Research goal:
 {goal}
@@ -148,6 +163,10 @@ PLAN_CONFIRMATION_PROMPT = """You are deciding whether the user has confirmed a 
 
 Research goal:
 {goal}
+
+Recent conversation (most recent {history_limit} turns):
+{conversation_history}
+
 
 Current plan:
 {plan}

@@ -7,6 +7,8 @@ from typing import List, Optional
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agents.shared.models import get_llm
+from agents.shared.utils import get_formatted_recent_history
+
 from .prompts import PLANNER_PROMPT, PLANNER_REVISE_PROMPT
 
 
@@ -23,16 +25,22 @@ class ResearchPlan:
         return "\n".join(f"{i + 1}. {step}" for i, step in enumerate(self.steps))
 
 
-async def make_plan(goal: str) -> ResearchPlan:
+async def make_plan(state, goal: str) -> ResearchPlan:
     """Generate a research plan for the given confirmed goal.
 
     Falls back to a minimal two-step plan if the LLM output cannot be parsed.
     """
     llm = get_llm(strong=True)
 
+    history_limit = 7
+    conversation_history = get_formatted_recent_history(state=state, max_messages=history_limit)
+
     response = await llm.ainvoke(
         [
-            SystemMessage(content=PLANNER_PROMPT),
+            SystemMessage(content=PLANNER_PROMPT.format(
+                conversation_history=conversation_history,
+                history_limit=history_limit
+            )),
             HumanMessage(content=f"Research goal: {goal}"),
         ]
     )
@@ -56,6 +64,7 @@ async def make_plan(goal: str) -> ResearchPlan:
 
 
 async def revise_plan(
+    state,
     goal: str,
     existing_steps: List[str],
     done_when: str,
@@ -72,11 +81,16 @@ async def revise_plan(
         f"{i + 1}. {step}" for i, step in enumerate(existing_steps)
     )
 
+    history_limit = 7
+    conversation_history = get_formatted_recent_history(state=state, max_messages=history_limit)
+
     response = await llm.ainvoke(
         [
             SystemMessage(
                 content=PLANNER_REVISE_PROMPT.format(
                     goal=goal,
+                    conversation_history=conversation_history,
+                    history_limit=history_limit,
                     existing_steps=existing_steps_text,
                     done_when=done_when,
                     revision_notes=revision_notes,

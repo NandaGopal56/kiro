@@ -158,13 +158,24 @@ def _format_details(details: Mapping[str, Any]) -> str:
 def sanitize_state_for_log(state: Mapping[str, Any]) -> Dict[str, Any]:
     """Return a trimmed copy of graph state safe for DEBUG dumps."""
     safe: Dict[str, Any] = {}
+
     for key, value in state.items():
         if key in _MESSAGE_LIST_KEYS:
             try:
-                safe[key] = f"[{len(value)} messages]"
+                previews = []
+                for msg in value:
+                    content = getattr(msg, "content", str(msg))
+                    words = str(content).split()
+                    preview = " ".join(words[:10])
+                    if len(words) > 10:
+                        preview += "..."
+                    previews.append(preview)
+
+                safe[key] = previews
             except Exception:
                 safe[key] = "[messages]"
             continue
+
         if isinstance(value, str) and len(value) > _STATE_TRUNCATE_LEN:
             safe[key] = (
                 value[:_STATE_TRUNCATE_LEN]
@@ -172,6 +183,7 @@ def sanitize_state_for_log(state: Mapping[str, Any]) -> Dict[str, Any]:
             )
         else:
             safe[key] = value
+
     return safe
 
 
