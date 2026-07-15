@@ -8,9 +8,11 @@ from dotenv import load_dotenv
 
 from agents.client import gateway
 from agents.shared.storage import create_thread, init_db
-from shared.logging import get_logger, log_state
-
-logger = get_logger("agents.__main__", log_file="supervisor.log")
+from agents.shared.logging import (
+    get_agent_logger,
+    log_invoke_start,
+)
+logger = get_agent_logger("cli", "__main__")
 
 load_dotenv()
 
@@ -30,7 +32,7 @@ async def invoke_conversation(
     thread_id: str = "1",
     agent_name: str = "supervisor",
 ) -> AsyncGenerator[str, None]:
-    logger.info("invoke_conversation called: agent=%s thread=%s message_summary=%s", agent_name, thread_id, (message[:200] + "...") if len(message) > 200 else message)
+    log_invoke_start(logger, agent_name, thread_id=thread_id, mode="cli", task_preview=message)
     response_text = await gateway.invoke(
         agent_name=agent_name,
         task=message,

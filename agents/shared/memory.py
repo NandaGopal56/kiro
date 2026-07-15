@@ -3,13 +3,10 @@
 # Thin async wrappers around the SQLite storage layer.
 # Every agent calls only these four functions — the storage backend
 # is swappable here without touching any agent code.
-#
-# thread_id throughout the agents is a str (LangGraph convention).
-# The SQLite storage uses int. We cast at this boundary so neither
-# side needs to know about the other's type.
 
 from typing import Any, Dict, List, Optional
 
+from agents.shared.logging import log_save
 from agents.shared.storage import (
     add_message     as _add_message,
     add_tool_call   as _add_tool_call,
@@ -17,12 +14,27 @@ from agents.shared.storage import (
     get_full_thread as _get_full_thread,
 )
 
+
+def _preview(text: str, limit: int = 120) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"... [len={len(text)}]"
+
+
 async def save_tool_call(
     message_id: int,
     call_id: str,
     tool_input: Dict[str, Any],
 ) -> None:
     """Attach a tool call to an assistant message."""
+    tool_name = tool_input.get("name", "unknown")
+    log_save(
+        "tool_call",
+        "insert",
+        message_id=message_id,
+        call_id=call_id,
+        tool=tool_name,
+    )
     await _add_tool_call(
         message_id=message_id,
         tool_input_json=tool_input,
@@ -36,6 +48,14 @@ async def save_tool_result(
     output: str,
 ) -> None:
     """Store the result of a tool call."""
+    log_save(
+        "tool_result",
+        "update",
+        message_id=message_id,
+        call_id=call_id,
+        output_len=len(output) if output else 0,
+        output_preview=_preview(output) if output else "",
+    )
     await _update_tool_result(
         message_id=message_id,
         call_id=call_id,
@@ -44,10 +64,7 @@ async def save_tool_result(
 
 
 async def load_thread(thread_id: str) -> List[Dict[str, Any]]:
-    """
-    Load the full message history for a thread.
-    Returns a list of dicts — each with: role, content, tool_calls.
-    """
+    """Load the full message history for a thread."""
     return await _get_full_thread(int(thread_id))
 
 
@@ -57,12 +74,32 @@ async def save_message_idempotent(
     content: str = "",
 ) -> int:
     """Save a message only if it is not already the last message in the thread history."""
-    db_history = await load_thread(thread_id)
+    db_history = await _get_full_thread(int(thread_id))
     if db_history:
         last_msg = db_history[-1]
         if last_msg.get("role") == role and last_msg.get("content") == content:
-            return last_msg.get("message_id")
-    return await _add_message(int(thread_id), role, content)
+            message_id = last_msg.get("message_id")
+            log_save(
+                "message",
+                "skip_duplicate",
+                thread_id=thread_id,
+                role=role,
+                message_id=message_id,
+                content_len=len(content),
+            )
+            return message_id
+
+    message_id = await _add_message(int(thread_id), role, content)
+    log_save(
+        "message",
+        "insert",
+        thread_id=thread_id,
+        role=role,
+        message_id=message_id,
+        content_len=len(content),
+        content_preview=_preview(content),
+    )
+    return message_id
 
 
 async def rebuild_messages_from_db(thread_id: str) -> list:
@@ -70,7 +107,7 @@ async def rebuild_messages_from_db(thread_id: str) -> list:
     from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
     import json
 
-    db_history = await load_thread(thread_id)
+    db_history = await _get_full_thread(int(thread_id))
     loaded_messages = []
     for msg in db_history:
         role = msg.get("role")
@@ -107,4 +144,11 @@ async def rebuild_messages_from_db(thread_id: str) -> list:
                     else:
                         tool_output_str = tool_output
                     loaded_messages.append(ToolMessage(content=tool_output_str, tool_call_id=call_id))
+
+    log_save(
+        "thread",
+        "rebuild_messages",
+        thread_id=thread_id,
+        loaded_count=len(loaded_messages),
+    )
     return loaded_messages

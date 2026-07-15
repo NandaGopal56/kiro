@@ -1,8 +1,16 @@
 from __future__ import annotations
 
-import json
+import logging
 from typing import Any, AsyncIterator, Dict, Optional
-from shared.logging import get_logger, log_state
+from agents.shared.logging import (
+    get_agent_logger,
+    ensure_invocation_session,
+    log_event,
+    log_invoke_end,
+    log_invoke_start,
+    log_node_state,
+    log_stream_update,
+)
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
@@ -15,26 +23,27 @@ from .nodes import ask_user, make_route_request, what_to_do
 from .state import SupervisorState
 
 DEBUG_MODE = True
-logger = get_logger("agents.supervisor", log_file="supervisor.log")
+logger = get_agent_logger("supervisor", "graph")
 
 
 def build_supervisor_graph(agents: Dict[str, BaseAgent]):
     """Build and compile the supervisor's LangGraph."""
     logger.info("Building supervisor graph for agents: %s", list(agents.keys()))
+    log_event(logger, "GRAPH_BUILD", component="supervisor", agents=list(agents.keys()))
     g = StateGraph(SupervisorState)
 
     # -- Nodes ----------------------------------------------------------------
     g.add_node("route_request", make_route_request(agents))
     g.add_node("ask_user",      ask_user)
-    logger.debug("Added core nodes: route_request, ask_user")
+    log_event(logger, "GRAPH_NODES_ADDED", component="supervisor", nodes=["route_request", "ask_user", *list(agents.keys())])
 
     for agent_id, agent in agents.items():
         try:
             subgraph = agent.get_compiled_graph(checkpointer=True)
-            logger.debug("Compiled subgraph for agent=%s (standalone compiled)", agent_id)
+            log_event(logger, "SUBGRAPH_COMPILED", agent_id=agent_id, source="standalone")
         except Exception:
             subgraph = agent.graph
-            logger.debug("Using existing compiled graph for agent=%s", agent_id)
+            log_event(logger, "SUBGRAPH_ATTACHED", agent_id=agent_id, source="existing_graph")
         g.add_node(agent_id, subgraph)
 
     # -- Edges ----------------------------------------------------------------
@@ -52,7 +61,7 @@ def build_supervisor_graph(agents: Dict[str, BaseAgent]):
 
     checkpointer = get_checkpointer("supervisor")
     compiled = g.compile(checkpointer=checkpointer)
-    logger.info("Supervisor graph compiled with checkpointer for 'supervisor'")
+    log_event(logger, "GRAPH_COMPILED", component="supervisor", checkpointer="supervisor")
     return compiled
 
 
@@ -93,10 +102,10 @@ class Supervisor(BaseAgent):
         try:
             snapshot = await self._graph.aget_state(cfg, subgraphs=True)
             pending = bool(snapshot.next)
-            logger.debug("_pending_interrupt thread=%s pending=%s next=%s", thread_id, pending, snapshot.next)
+            log_event(logger, "INTERRUPT_CHECK", thread_id=thread_id, pending=pending, next_nodes=str(snapshot.next))
             return pending
         except Exception as e:
-            logger.debug("_pending_interrupt thread=%s error=%s", thread_id, e)
+            log_event(logger, "INTERRUPT_CHECK_ERROR", level=logging.WARNING, thread_id=thread_id, error=str(e))
             return False
 
     async def _run(self, task: str, thread_id: str, config: Optional[RunnableConfig]):
@@ -113,19 +122,17 @@ class Supervisor(BaseAgent):
         route_request path, which rebuilds state and classifies the intent.
         """
         cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
-        logger.info("_run start: thread=%s task_preview=%s", thread_id, (task[:200] + "...") if len(task) > 200 else task)
+        log_invoke_start(logger, "supervisor", thread_id=thread_id, mode="invoke", task_preview=task)
 
         from agents.shared.memory import save_message_idempotent
         await save_message_idempotent(thread_id, "user", task)
-        logger.debug("Saved user message idempotent for thread=%s", thread_id)
 
         if await self._pending_interrupt(thread_id, cfg):
-            logger.debug("_run thread=%s resuming pending interrupt reply=%r", thread_id, task)
+            log_event(logger, "RESUME_INTERRUPT", thread_id=thread_id, reply_preview=(task[:200] + "...") if len(task) > 200 else task)
             return Command(resume=task), cfg
 
         previous_state = await load_previous_state(self.graph, thread_id, "supervisor")
-        logger.debug("Loaded previous_state present=%s for thread=%s", bool(previous_state), thread_id)
-        log_state(logger, "supervisor.previous_state", previous_state)
+        log_event(logger, "STATE_LOAD", thread_id=thread_id, found=bool(previous_state))
 
         if previous_state is None:
             state = SupervisorState(
@@ -133,15 +140,15 @@ class Supervisor(BaseAgent):
                 thread_id=thread_id,
                 user_input=task,
             )
-            logger.debug("Initialized new SupervisorState for thread=%s", thread_id)
+            log_event(logger, "STATE_INIT", thread_id=thread_id, source="new_session")
         else:
             state = merge_with_new_messages(previous_state, {
                 "messages":   [HumanMessage(content=task)],
                 "thread_id":  thread_id,
                 "user_input": task,
             })
-            logger.debug("Merged previous state with new message for thread=%s", thread_id)
-            log_state(logger, "supervisor.merged_state", state)
+            log_event(logger, "STATE_MERGE", thread_id=thread_id, source="checkpoint")
+            log_node_state(logger, "supervisor", state, label="merged_state")
 
         return state, cfg
 
@@ -164,19 +171,21 @@ class Supervisor(BaseAgent):
         context: Optional[Dict[str, Any]] = None,
         config: Optional[RunnableConfig] = None,
     ) -> str:
-        run_input, cfg = await self._run(task, thread_id, config)
-        result = await self._graph.ainvoke(run_input, config=cfg)
+        async with ensure_invocation_session("supervisor", thread_id, mode="invoke"):
+            run_input, cfg = await self._run(task, thread_id, config)
+            result = await self._graph.ainvoke(run_input, config=cfg)
 
-        # If this invocation caused a NEW interrupt (e.g. deep_research just
-        # drafted a plan and paused), return the interrupt's message directly.
-        # No assistant message is in the DB yet at this point.
-        pending = result.get("__interrupt__")
-        if pending:
-            payload = pending[0].value if hasattr(pending[0], "value") else pending[0]
-            logger.debug("invoke thread=%s new interrupt payload=%r", thread_id, payload)
-            return payload.get("message", str(payload)) if isinstance(payload, dict) else str(payload)
+            pending = result.get("__interrupt__")
+            if pending:
+                payload = pending[0].value if hasattr(pending[0], "value") else pending[0]
+                log_event(logger, "INTERRUPT_RAISED", thread_id=thread_id, payload_type=type(payload).__name__)
+                response = payload.get("message", str(payload)) if isinstance(payload, dict) else str(payload)
+                log_invoke_end(logger, "supervisor", thread_id=thread_id, mode="invoke", interrupted=True, response_length=len(response))
+                return response
 
-        return await self._extract_response(result, thread_id)
+            response = await self._extract_response(result, thread_id)
+            log_invoke_end(logger, "supervisor", thread_id=thread_id, mode="invoke", response_length=len(response))
+            return response
 
     async def stream(
         self,
@@ -185,7 +194,16 @@ class Supervisor(BaseAgent):
         context: Optional[Dict[str, Any]] = None,
         config: Optional[RunnableConfig] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
-        run_input, cfg = await self._run(task, thread_id, config)
-        async for update in self._graph.astream(run_input, config=cfg, stream_mode="updates"):
-            for node_name, node_update in update.items():
-                yield {"node": node_name, "update": node_update}
+        async with ensure_invocation_session("supervisor", thread_id, mode="stream"):
+            run_input, cfg = await self._run(task, thread_id, config)
+            async for update in self._graph.astream(run_input, config=cfg, stream_mode="updates"):
+                for node_name, node_update in update.items():
+                    log_stream_update(
+                        logger,
+                        "supervisor",
+                        thread_id=thread_id,
+                        node=node_name,
+                        update_keys=list(node_update.keys()) if isinstance(node_update, dict) else None,
+                    )
+                    yield {"node": node_name, "update": node_update}
+            log_invoke_end(logger, "supervisor", thread_id=thread_id, mode="stream")

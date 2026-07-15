@@ -5,9 +5,10 @@ import asyncio
 from dataclasses import dataclass
 
 from agents.client import gateway
-from shared.logging import get_logger, log_state
+from agents.shared.logging import get_agent_logger
+from shared.logging import log_state
 
-logger = get_logger("agents.test", log_file="agents_test.log")
+logger = get_agent_logger("test", "smoke")
 
 
 @dataclass(frozen=True)

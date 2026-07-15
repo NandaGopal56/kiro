@@ -12,9 +12,16 @@ from agents.shared.memory import (
     save_tool_call,
     save_tool_result,
 )
+from agents.shared.logging import (
+    get_agent_logger,
+    log_branch,
+    log_llm_result,
+    log_node_enter,
+    log_node_exit,
+    log_route,
+)
 from agents.shared.models import get_llm
 from agents.shared.tools import research_tools
-from shared.logging import get_logger, log_state
 
 from .planner import ResearchPlan, make_plan, revise_plan
 from .prompts import (
@@ -30,54 +37,28 @@ from .prompts import (
 )
 from .state import ResearchState
 
-DEBUG_MODE = True
 MAX_ITERATIONS = 10
 
-logger = get_logger("agents.deep_research.nodes", log_file="deep_research.log")
+logger = get_agent_logger("deep_research", "nodes")
 
 _tool_node = ToolNode(tools=research_tools)
 _llm_with_tools = get_llm(strong=True).bind_tools(research_tools)
 
 
-# ============================================================================
-# Logging helpers
-# ============================================================================
-
 def _log_state(node_name: str, state: Dict[str, Any]) -> None:
-    """Log a trimmed view of the node input state."""
-    if not DEBUG_MODE:
-        return
-
-    safe_state: Dict[str, Any] = {}
-    for key, value in state.items():
-        if key == "messages":
-            try:
-                safe_state[key] = f"[{len(value)} messages]"
-            except Exception:
-                safe_state[key] = "[messages]"
-            continue
-
-        if isinstance(value, str) and len(value) > 1200:
-            safe_state[key] = value[:1200] + f"... [truncated, total={len(value)}]"
-        else:
-            safe_state[key] = value
-
-    logger.debug("NODE ENTRY: %s", node_name)
-    log_state(logger, f"deep_research.node.{node_name}.input_state", safe_state)
+    log_node_enter(logger, node_name, thread_id=state.get("thread_id", ""), state=state)
 
 
 def _log_branch(node_name: str, branch: str, **details: Any) -> None:
-    """Log an explicit routing or conditional branch decision."""
-    if not DEBUG_MODE:
-        return
-    logger.debug("BRANCH %s -> %s | %s", node_name, branch, details)
+    if node_name.endswith("_router"):
+        reason = details.pop("reason", "")
+        log_route(logger, node_name, branch, reason=reason, **details)
+    else:
+        log_branch(logger, node_name, branch, **details)
 
 
 def _log_llm_result(node_name: str, label: str, payload: Dict[str, Any]) -> None:
-    """Log parsed JSON or structured outputs from an LLM call."""
-    if not DEBUG_MODE:
-        return
-    log_state(logger, f"{node_name}.{label}", payload)
+    log_llm_result(logger, node_name, label, payload)
 
 
 def _get_thread_id(state: ResearchState, config: RunnableConfig) -> str:

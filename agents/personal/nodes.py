@@ -20,34 +20,36 @@ from agents.shared.memory import (
 from agents.shared.models import get_classifier_llm, get_llm
 from agents.shared.tools import personal_tools
 from agents.shared.video_buffer import video_buffer
-from shared.logging import get_logger, log_state
-
-logger = get_logger("agents.personal.nodes", log_file="personal.log")
+from agents.shared.logging import (
+    get_agent_logger,
+    log_branch,
+    log_node_enter,
+    log_node_exit,
+    log_route,
+)
 
 from .prompts import STEP_CLASSIFIER_PROMPT, SUMMARY_PROMPT, SYSTEM_PROMPT
 from .state import PersonalState
 
-# Built-in LangGraph tool executor
+logger = get_agent_logger("personal", "nodes")
+
 _tool_node = ToolNode(tools=personal_tools)
-
-# Main LLM with tools bound — created once at import time
 _llm_with_tools = get_llm().bind_tools(personal_tools)
-
-# How many past user turns to keep in the prompt window (beyond the summary)
 MAX_HISTORY_TURNS = 6
 
-# ---------------------------------------------------------------------------
-# Node 2 — decide_steps
-# Asks a cheap classifier which context steps (if any) to run before answering.
-# Returns a list like ["web_search"] or [] for plain conversation.
-# ---------------------------------------------------------------------------
+
+def _thread_id(config: RunnableConfig, state: PersonalState) -> str:
+    return config.get("configurable", {}).get("thread_id", "") or state.get("thread_id", "")
+
 
 async def decide_steps(state: PersonalState, config: RunnableConfig) -> Dict[str, Any]:
-    logger.debug("decide_steps called for thread=%s", config.get("configurable", {}).get("thread_id"))
-    log_state(logger, "decide_steps.input_state", state)
+    tid = _thread_id(config, state)
+    log_node_enter(logger, "decide_steps", thread_id=tid, state=state)
+
     messages      = list(state.get("messages", []))
     last_user_msg = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
     if not last_user_msg:
+        log_node_exit(logger, "decide_steps", thread_id=tid, steps_needed=[])
         return {"steps_needed": []}
 
     user_text = last_user_msg.content if isinstance(last_user_msg.content, str) else str(last_user_msg.content)
@@ -63,19 +65,14 @@ async def decide_steps(state: PersonalState, config: RunnableConfig) -> Dict[str
     except (json.JSONDecodeError, ValueError):
         steps = []
 
-    logger.debug("decide_steps result: steps=%s", steps)
+    log_node_exit(logger, "decide_steps", thread_id=tid, steps_needed=steps)
     return {"steps_needed": steps}
 
 
-# ---------------------------------------------------------------------------
-# Router — pick_context_steps
-# Called after decide_steps. Returns the list of parallel node names to run,
-# or ["call_llm"] when no context gathering is needed.
-# ---------------------------------------------------------------------------
-
 def pick_context_steps(state: PersonalState) -> List[str]:
-    logger.debug("pick_context_steps called")
-    log_state(logger, "pick_context_steps.input_state", state)
+    tid = state.get("thread_id", "")
+    log_node_enter(logger, "pick_context_steps", thread_id=tid, state=state)
+
     step_map = {
         "video_capture":   "grab_video_frame",
         "web_search":      "fetch_web_context",
@@ -84,78 +81,71 @@ def pick_context_steps(state: PersonalState) -> List[str]:
     steps_needed = state.get("steps_needed", [])
     selected     = [step_map[s] for s in steps_needed if s in step_map]
     chosen = selected if selected else ["call_llm"]
-    logger.debug("pick_context_steps chosen=%s", chosen)
+
+    log_route(
+        logger,
+        "pick_context_steps",
+        ",".join(chosen),
+        reason="context steps selected by classifier" if selected else "no context needed",
+        steps_needed=steps_needed,
+        selected=chosen,
+    )
     return chosen
 
 
-# ---------------------------------------------------------------------------
-# Node 3a — grab_video_frame
-# ---------------------------------------------------------------------------
-
 async def grab_video_frame(state: PersonalState, config: RunnableConfig) -> Dict[str, Any]:
-    logger.debug("grab_video_frame called")
-    log_state(logger, "grab_video_frame.input_state", state)
+    tid = _thread_id(config, state)
+    log_node_enter(logger, "grab_video_frame", thread_id=tid, state=state)
+
     frame = video_buffer.latest()
     if frame is None:
-        logger.debug("grab_video_frame: no frame available")
+        log_branch(logger, "grab_video_frame", "no_frame_available")
+        log_node_exit(logger, "grab_video_frame", thread_id=tid, frame_available=False)
         return {"messages": [HumanMessage(content=[{"type": "text", "text": "No camera frame available right now."}])]}
 
     b64      = base64.b64encode(frame).decode("ascii")
     data_url = f"data:image/jpeg;base64,{b64}"
+    log_node_exit(logger, "grab_video_frame", thread_id=tid, frame_available=True)
     return {"messages": [HumanMessage(content=[
         {"type": "text",      "text": "Here is the current camera view:"},
         {"type": "image_url", "image_url": {"url": data_url}},
     ])]}
 
 
-# ---------------------------------------------------------------------------
-# Node 3b — fetch_web_context
-# Hook for proactive web retrieval before the LLM call.
-# ---------------------------------------------------------------------------
-
 async def fetch_web_context(state: PersonalState, config: RunnableConfig) -> Dict[str, Any]:
-    logger.debug("fetch_web_context called")
-    log_state(logger, "fetch_web_context.input_state", state)
-    # TODO: run web_search(last user message) and inject results as a SystemMessage
+    tid = _thread_id(config, state)
+    log_node_enter(logger, "fetch_web_context", thread_id=tid, state=state)
+    log_node_exit(logger, "fetch_web_context", thread_id=tid, status="stub")
     return {}
 
-
-# ---------------------------------------------------------------------------
-# Node 3c — fetch_doc_context
-# Hook for proactive RAG retrieval before the LLM call.
-# ---------------------------------------------------------------------------
 
 async def fetch_doc_context(state: PersonalState, config: RunnableConfig) -> Dict[str, Any]:
-    logger.debug("fetch_doc_context called")
-    log_state(logger, "fetch_doc_context.input_state", state)
-    # TODO: run document_search(last user message) and inject results as a SystemMessage
+    tid = _thread_id(config, state)
+    log_node_enter(logger, "fetch_doc_context", thread_id=tid, state=state)
+    log_node_exit(logger, "fetch_doc_context", thread_id=tid, status="stub")
     return {}
 
 
-# ---------------------------------------------------------------------------
-# Node 3d — join_context
-# Waits for all parallel context branches before calling the LLM.
-# ---------------------------------------------------------------------------
-
 def join_context(state: PersonalState) -> PersonalState:
-    logger.debug("join_context called")
-    log_state(logger, "join_context.input_state", state)
+    tid = state.get("thread_id", "")
+    log_node_enter(logger, "join_context", thread_id=tid, state=state)
+    log_node_exit(logger, "join_context", thread_id=tid)
     return state
 
 
-# ---------------------------------------------------------------------------
-# Node 4 — call_llm
-# Builds prompt from full checkpointer history, calls LLM, saves response.
-# ---------------------------------------------------------------------------
-
 async def call_llm(state: PersonalState, config: RunnableConfig) -> Dict[str, Any]:
-    thread_id = config.get("configurable", {}).get("thread_id", "")
+    thread_id = _thread_id(config, state)
     messages  = list(state.get("messages", []))
     summary   = state.get("summary", "")
-    logger.info("call_llm: thread=%s summary_len=%d messages=%d", thread_id, len(summary) if summary else 0, len(messages))
-    log_state(logger, "call_llm.input_state", state)
+    log_node_enter(
+        logger,
+        "call_llm",
+        thread_id=thread_id,
+        state=state,
+        summary_len=len(summary) if summary else 0,
+        message_count=len(messages),
+    )
 
-    # Build prompt: system message, optional summary, then recent history
     prompt: List[Any] = [SystemMessage(content=SYSTEM_PROMPT)]
     if summary:
         prompt.append(SystemMessage(content=f"Summary of earlier conversation:\n{summary}"))
@@ -165,48 +155,77 @@ async def call_llm(state: PersonalState, config: RunnableConfig) -> Dict[str, An
     content          = response.content if isinstance(response.content, str) else ""
     assistant_msg_id = await save_message_idempotent(thread_id, "assistant", content)
 
-    logger.debug("call_llm: assistant_msg_id=%s response_tool_calls=%s", assistant_msg_id, getattr(response, "tool_calls", None))
+    tool_calls = getattr(response, "tool_calls", []) or []
+    log_branch(
+        logger,
+        "call_llm",
+        "response_ready",
+        assistant_msg_id=assistant_msg_id,
+        tool_call_count=len(tool_calls),
+    )
 
-    for tc in getattr(response, "tool_calls", []) or []:
+    for tc in tool_calls:
         await save_tool_call(message_id=assistant_msg_id, call_id=tc.get("id", ""), tool_input=tc)
 
+    log_node_exit(
+        logger,
+        "call_llm",
+        thread_id=thread_id,
+        response_len=len(content),
+        tool_call_count=len(tool_calls),
+    )
     return {
         "messages":                     [response],
         "current_assistant_message_id": assistant_msg_id,
     }
 
 
-# ---------------------------------------------------------------------------
-# Router — what_next
-# Called after call_llm. Decides: run tools, compress history, or finish.
-# ---------------------------------------------------------------------------
-
 def what_next(state: PersonalState) -> str:
-    logger.debug("what_next called")
-    log_state(logger, "what_next.input_state", state)
+    tid = state.get("thread_id", "")
     messages = list(state.get("messages", []))
     if not messages:
-        return "done"
+        target = "done"
+        log_route(logger, "what_next", target, reason="no messages", thread_id=tid)
+        return target
+
     last_msg = messages[-1]
     if isinstance(last_msg, AIMessage) and getattr(last_msg, "tool_calls", None):
-        return "run_tools"
+        target = "run_tools"
+        log_route(
+            logger,
+            "what_next",
+            target,
+            reason="assistant issued tool calls",
+            thread_id=tid,
+            tool_call_count=len(last_msg.tool_calls),
+        )
+        return target
+
     if len(messages) > 12:
-        return "compress_history"
+        target = "compress_history"
+        log_route(
+            logger,
+            "what_next",
+            target,
+            reason="message history exceeds threshold",
+            thread_id=tid,
+            message_count=len(messages),
+        )
+        return target
+
+    log_route(logger, "what_next", "done", reason="conversation turn complete", thread_id=tid)
     return "done"
 
 
-# ---------------------------------------------------------------------------
-# Node 5 — run_tools
-# Executes tool calls the LLM made, saves results, loops back to call_llm.
-# ---------------------------------------------------------------------------
-
 async def run_tools(state: PersonalState, config: RunnableConfig) -> Dict[str, Any]:
-    logger.debug("run_tools called")
-    log_state(logger, "run_tools.input_state", state)
+    tid = _thread_id(config, state)
+    log_node_enter(logger, "run_tools", thread_id=tid, state=state)
+
     messages   = list(state.get("messages", []))
     last_msg   = messages[-1] if messages else None
     tool_calls = getattr(last_msg, "tool_calls", None) if last_msg else None
     if not tool_calls:
+        log_node_exit(logger, "run_tools", thread_id=tid, tool_messages=0)
         return {}
 
     result        = await _tool_node.ainvoke({"messages": messages}, config)
@@ -217,18 +236,14 @@ async def run_tools(state: PersonalState, config: RunnableConfig) -> Dict[str, A
         if assistant_msg_id:
             await save_tool_result(message_id=assistant_msg_id, call_id=tm.tool_call_id, output=tm.content)
 
-    logger.debug("run_tools: produced %d tool messages", len(tool_messages))
+    log_node_exit(logger, "run_tools", thread_id=tid, tool_messages=len(tool_messages))
     return {"messages": tool_messages}
 
 
-# ---------------------------------------------------------------------------
-# Node 6 — compress_history
-# Produces a rolling summary to keep prompts short on long conversations.
-# ---------------------------------------------------------------------------
-
 async def compress_history(state: PersonalState, config: RunnableConfig) -> Dict[str, Any]:
-    logger.debug("compress_history called")
-    log_state(logger, "compress_history.input_state", state)
+    tid = _thread_id(config, state)
+    log_node_enter(logger, "compress_history", thread_id=tid, state=state)
+
     existing_summary = state.get("summary", "")
     messages         = list(state.get("messages", []))
 
@@ -240,14 +255,10 @@ async def compress_history(state: PersonalState, config: RunnableConfig) -> Dict
 
     prompt   = SUMMARY_PROMPT.format(existing_summary=existing_summary or "None yet.", new_messages=msg_text)
     response = await get_llm().ainvoke([HumanMessage(content=prompt)])
-    logger.debug("compress_history: produced summary_len=%d", len(response.content) if response and getattr(response, 'content', None) else 0)
+    summary_len = len(response.content) if response and getattr(response, "content", None) else 0
+    log_node_exit(logger, "compress_history", thread_id=tid, summary_len=summary_len)
     return {"summary": response.content}
 
-
-# ---------------------------------------------------------------------------
-# Internal helper — _trim_to_recent_turns
-# Keeps only the last N human turns so the context window stays manageable.
-# ---------------------------------------------------------------------------
 
 def _trim_to_recent_turns(messages: Sequence[Any], max_turns: int) -> List[Any]:
     if not messages:

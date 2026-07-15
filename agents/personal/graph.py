@@ -25,9 +25,16 @@ from agents.personal.nodes import (
     what_next,
 )
 from agents.personal.state import PersonalState
-from shared.logging import get_logger
+from agents.shared.logging import (
+    get_agent_logger,
+    ensure_invocation_session,
+    log_event,
+    log_invoke_end,
+    log_invoke_start,
+    log_stream_update,
+)
 
-logger = get_logger("agents.personal.graph", log_file="personal.log")
+logger = get_agent_logger("personal", "graph")
 
 
 def build_personal_graph(checkpointer=None):
@@ -89,8 +96,9 @@ def build_personal_graph(checkpointer=None):
     g.add_edge("compress_history", END)
 
     if checkpointer is not None:
-        logger.debug("build_personal_graph using provided checkpointer -> %r", repr(checkpointer))
+        log_event(logger, "GRAPH_BUILD", component="personal", checkpointer=repr(checkpointer))
     graph = g.compile(checkpointer=checkpointer)
+    log_event(logger, "GRAPH_COMPILED", component="personal")
     return graph
 
 
@@ -150,36 +158,40 @@ class PersonalAgent(BaseAgent):
         then executes the graph.
         """
         cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
+        async with ensure_invocation_session("personal", thread_id, mode="invoke"):
+            log_invoke_start(logger, "personal", thread_id=thread_id, mode="invoke", task_preview=task)
 
-        from agents.shared.memory import save_message_idempotent
-        await save_message_idempotent(thread_id, "user", task)
+            from agents.shared.memory import save_message_idempotent
+            await save_message_idempotent(thread_id, "user", task)
 
-        # Load previous checkpoint for this thread_id
-        previous_state = await load_previous_state(self.graph, thread_id, "personal")
+            previous_state = await load_previous_state(self.graph, thread_id, "personal")
 
-        if previous_state is None:
-            # First call — start a new session
-            initial_state = PersonalState(
-                messages=[HumanMessage(content=task)],
-                thread_id=thread_id,
-            )
-            result = await self.graph.ainvoke(initial_state, config=cfg)
-        else:
-            # Subsequent call — merge new message with previous checkpoint state
-            new_state_values = {
-                "messages": [HumanMessage(content=task)],
-                "thread_id": thread_id,
-            }
-            merged_state = merge_with_new_messages(previous_state, new_state_values)
-            result = await self.graph.ainvoke(merged_state, config=cfg)
+            if previous_state is None:
+                log_event(logger, "STATE_INIT", thread_id=thread_id, source="new_session")
+                initial_state = PersonalState(
+                    messages=[HumanMessage(content=task)],
+                    thread_id=thread_id,
+                )
+                result = await self.graph.ainvoke(initial_state, config=cfg)
+            else:
+                log_event(logger, "STATE_MERGE", thread_id=thread_id, source="checkpoint")
+                new_state_values = {
+                    "messages": [HumanMessage(content=task)],
+                    "thread_id": thread_id,
+                }
+                merged_state = merge_with_new_messages(previous_state, new_state_values)
+                result = await self.graph.ainvoke(merged_state, config=cfg)
 
-        # Extract the last assistant message as the response
-        messages = list(result.get("messages", []))
-        from langchain_core.messages import AIMessage
-        for msg in reversed(messages):
-            if isinstance(msg, AIMessage) and msg.content:
-                return msg.content if isinstance(msg.content, str) else str(msg.content)
-        return ""
+            messages = list(result.get("messages", []))
+            from langchain_core.messages import AIMessage
+            for msg in reversed(messages):
+                if isinstance(msg, AIMessage) and msg.content:
+                    response = msg.content if isinstance(msg.content, str) else str(msg.content)
+                    log_invoke_end(logger, "personal", thread_id=thread_id, mode="invoke", response_length=len(response))
+                    return response
+
+            log_invoke_end(logger, "personal", thread_id=thread_id, mode="invoke", response_length=0)
+            return ""
 
     async def stream(
         self,
@@ -195,33 +207,39 @@ class PersonalAgent(BaseAgent):
         then streams all node updates.
         """
         cfg = config or RunnableConfig(configurable={"thread_id": thread_id})
+        async with ensure_invocation_session("personal", thread_id, mode="stream"):
+            log_invoke_start(logger, "personal", thread_id=thread_id, mode="stream", task_preview=task)
 
-        from agents.shared.memory import save_message_idempotent
-        await save_message_idempotent(thread_id, "user", task)
+            from agents.shared.memory import save_message_idempotent
+            await save_message_idempotent(thread_id, "user", task)
 
-        # Load previous checkpoint for this thread_id
-        previous_state = await load_previous_state(self.graph, thread_id, "personal")
+            previous_state = await load_previous_state(self.graph, thread_id, "personal")
 
-        if previous_state is None:
-            # First call — start a new session
-            initial_state = PersonalState(
-                messages=[HumanMessage(content=task)],
-                thread_id=thread_id,
-            )
+            if previous_state is None:
+                log_event(logger, "STATE_INIT", thread_id=thread_id, source="new_session")
+                run_input = PersonalState(
+                    messages=[HumanMessage(content=task)],
+                    thread_id=thread_id,
+                )
+            else:
+                log_event(logger, "STATE_MERGE", thread_id=thread_id, source="checkpoint")
+                new_state_values = {
+                    "messages": [HumanMessage(content=task)],
+                    "thread_id": thread_id,
+                }
+                run_input = merge_with_new_messages(previous_state, new_state_values)
+
             async for update in self.graph.astream(
-                initial_state, config=cfg, stream_mode="updates"
+                run_input, config=cfg, stream_mode="updates"
             ):
                 for node_name, node_update in update.items():
+                    log_stream_update(
+                        logger,
+                        "personal",
+                        thread_id=thread_id,
+                        node=node_name,
+                        update_keys=list(node_update.keys()) if isinstance(node_update, dict) else None,
+                    )
                     yield {"node": node_name, "update": node_update}
-        else:
-            # Subsequent call — merge new message with previous checkpoint state
-            new_state_values = {
-                "messages": [HumanMessage(content=task)],
-                "thread_id": thread_id,
-            }
-            merged_state = merge_with_new_messages(previous_state, new_state_values)
-            async for update in self.graph.astream(
-                merged_state, config=cfg, stream_mode="updates"
-            ):
-                for node_name, node_update in update.items():
-                    yield {"node": node_name, "update": node_update}
+
+            log_invoke_end(logger, "personal", thread_id=thread_id, mode="stream")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import asyncio
 from pathlib import Path
 from typing import AsyncIterator, Dict, Optional
@@ -10,10 +11,17 @@ from agents.base import BaseAgent
 from agents.deep_research.graph import DeepResearchAgent
 from agents.personal.graph import PersonalAgent
 from agents.supervisor.grpah import Supervisor
-from shared.logging import get_logger, log_state
+from agents.shared.logging import (
+    get_agent_logger,
+    log_event,
+    log_invoke_end,
+    log_invoke_start,
+    log_node_state,
+    log_stream_update,
+)
 
 
-logger = get_logger("agents.client", log_file="supervisor.log")
+logger = get_agent_logger("client", "gateway")
 
 
 class AgentGateway:
@@ -28,29 +36,29 @@ class AgentGateway:
 
     def get_individual_agents(self) -> Dict[str, BaseAgent]:
         if self._agents is None:
-            logger.info("Initializing individual agents")
+            log_event(logger, "AGENTS_INIT", component="gateway")
             self._agents = {
                 "personal": PersonalAgent(),
                 "deep_research": DeepResearchAgent(),
             }
-            logger.debug("Initialized agents: %s", list(self._agents.keys()))
+            log_event(logger, "AGENTS_READY", agents=list(self._agents.keys()))
         return self._agents
 
     def get_supervisor(self) -> Supervisor:
         if self._supervisor is None:
-            logger.info("Creating Supervisor with agents")
+            log_event(logger, "SUPERVISOR_INIT", component="gateway")
             self._supervisor = Supervisor(agents=self.get_individual_agents())
-            logger.debug("Supervisor created: %s", type(self._supervisor))
+            log_event(logger, "SUPERVISOR_READY", supervisor_type=type(self._supervisor).__name__)
         return self._supervisor
 
     def get_agent(self, agent_name: str) -> BaseAgent:
-        logger.debug("Selecting agent '%s'", agent_name)
+        log_event(logger, "AGENT_SELECT", agent=agent_name, level=logging.DEBUG)
         if agent_name == "supervisor":
             return self.get_supervisor()
 
         agents = self.get_individual_agents()
         if agent_name not in agents:
-            logger.error("Unknown agent requested: %s", agent_name)
+            log_event(logger, "AGENT_UNKNOWN", agent=agent_name, level=logging.ERROR)
             raise KeyError(f"Unknown agent '{agent_name}'")
         return agents[agent_name]
 
@@ -62,21 +70,32 @@ class AgentGateway:
         context: Optional[Dict[str, object]] = None,
         config: Optional[RunnableConfig] = None,
     ) -> str:
-        agent_logger = get_logger(f"agent.{agent_name}", log_file=f"{agent_name}.log")
-        agent_logger.info("Invoke request: agent=%s thread=%s task_summary=%s", agent_name, thread_id, (task[:200] + "...") if len(task) > 200 else task)
-        log_state(agent_logger, "invoke.context", context)
-        try:
-            result = await self.get_agent(agent_name).invoke(
-                task=task,
-                thread_id=thread_id,
-                context=context,
-                config=config,
-            )
-            agent_logger.info("Invoke completed: agent=%s thread=%s response_length=%d", agent_name, thread_id, len(result) if result else 0)
-            return result
-        except Exception as e:
-            agent_logger.exception("Exception while invoking agent %s: %s", agent_name, e)
-            raise
+        from agents.shared.logging import ensure_invocation_session
+
+        async with ensure_invocation_session(agent_name, thread_id, mode="invoke"):
+            agent_logger = get_agent_logger(agent_name)
+            log_invoke_start(agent_logger, agent_name, thread_id=thread_id, mode="invoke", task_preview=task)
+            if context:
+                log_node_state(agent_logger, "invoke", context, label="context")
+            try:
+                result = await self.get_agent(agent_name).invoke(
+                    task=task,
+                    thread_id=thread_id,
+                    context=context,
+                    config=config,
+                )
+                log_invoke_end(
+                    agent_logger,
+                    agent_name,
+                    thread_id=thread_id,
+                    mode="invoke",
+                    response_length=len(result) if result else 0,
+                )
+                return result
+            except Exception as e:
+                log_event(agent_logger, "INVOKE_ERROR", level=logging.ERROR, agent=agent_name, thread=thread_id, error=str(e))
+                agent_logger.exception("Exception while invoking agent %s", agent_name)
+                raise
 
     async def stream(
         self,
@@ -86,17 +105,30 @@ class AgentGateway:
         context: Optional[Dict[str, object]] = None,
         config: Optional[RunnableConfig] = None,
     ) -> AsyncIterator[Dict[str, object]]:
-        agent_logger = get_logger(f"agent.{agent_name}", log_file=f"{agent_name}.log")
-        agent_logger.info("Stream requested: agent=%s thread=%s", agent_name, thread_id)
-        log_state(agent_logger, "stream.context", context)
-        async for update in self.get_agent(agent_name).stream(
-            task=task,
-            thread_id=thread_id,
-            context=context,
-            config=config,
-        ):
-            agent_logger.debug("Stream update: %s", update)
-            yield update
+        from agents.shared.logging import ensure_invocation_session
+
+        async with ensure_invocation_session(agent_name, thread_id, mode="stream"):
+            agent_logger = get_agent_logger(agent_name)
+            log_invoke_start(agent_logger, agent_name, thread_id=thread_id, mode="stream", task_preview=task)
+            if context:
+                log_node_state(agent_logger, "stream", context, label="context")
+            async for update in self.get_agent(agent_name).stream(
+                task=task,
+                thread_id=thread_id,
+                context=context,
+                config=config,
+            ):
+                node = update.get("node", "unknown")
+                node_update = update.get("update", {})
+                log_stream_update(
+                    agent_logger,
+                    agent_name,
+                    thread_id=thread_id,
+                    node=node,
+                    update_keys=list(node_update.keys()) if isinstance(node_update, dict) else None,
+                )
+                yield update
+            log_invoke_end(agent_logger, agent_name, thread_id=thread_id, mode="stream")
 
     def save_graphs(self) -> None:
         artifacts = Path(__file__).parent / "artifacts"
@@ -119,7 +151,7 @@ class AgentGateway:
             output_file_path=str(artifacts / "supervisor_full_system.png")
         )
 
-        logger.info("Graphs saved to %s", artifacts)
+        log_event(logger, "GRAPHS_SAVED", path=str(artifacts))
 
     def registered_agents(self) -> Dict[str, str]:
         agents = self.get_individual_agents()
