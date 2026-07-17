@@ -21,3 +21,4 @@ chroma_store
 .storages
 .stages/
 .logs/
+.models/

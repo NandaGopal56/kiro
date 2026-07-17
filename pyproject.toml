@@ -10,11 +10,13 @@ dependencies = [
     "langchain-openai>=1.1.7",
     "langgraph>=1.0.7",
     "langgraph-checkpoint-sqlite>=3.1.0",
+    "opencv-python>=4.13.0.92",
     "pydub>=0.25.1",
     "python-dotenv>=1.2.1",
     "sarvamai>=0.1.28",
     "sounddevice>=0.5.5",
     "tavily>=1.1.0",
+    "ultralytics>=8.4.99",
 ]
 
 [tool.setuptools.packages.find]
