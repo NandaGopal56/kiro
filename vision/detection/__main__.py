@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import argparse
 
-from vision.common.env import init_env
-from vision.common.logging import get_logger
+from dotenv import find_dotenv, load_dotenv
+
+from shared.logging import get_logger
 from vision.common.types import FrameResult
 from vision.detection.client import DetectionClient
 
 logger = get_logger("vision.detection.__main__", log_file="vision_detection.log")
-init_env()
+load_dotenv(find_dotenv())
 
 
 def _camera_loop(client: DetectionClient, max_frames: int = 0) -> None:

@@ -2,8 +2,8 @@
 
 Vision-Language Model (VLM) module. Turns a camera frame plus a natural-language
 prompt into a textual answer using an LLM with vision capabilities. Implements
-the `VisionClient` interface so it can run standalone (`__main__`) or be composed
-by `VisionPipeline` (on a throttled cadence for scene captioning).
+standalone (`__main__`) or be composed by `VisionPipeline` (on a throttled
+cadence for scene captioning).
 
 ## Files
 
@@ -14,9 +14,8 @@ by `VisionPipeline` (on a throttled cadence for scene captioning).
 - **`openai.py`** — `OpenAIVisionLM`, the LangChain + OpenAI implementation
   (`gpt-4o-mini` by default). Encodes the frame to a JPEG data-URL and sends it
   alongside the prompt. Reads `OPENAI_API_KEY` from `.env` (via `init_env`).
-- **`client.py`** — `VLMClient(VisionClient)`, the single entry point. Its
-  `run` performs a default scene caption; use `analyze(frame, prompt)` for
-  custom questions.
+- **`client.py`** — `VLMClient`, the standalone entry point. Its `run` performs
+  a default scene caption; use `analyze(frame, prompt)` for custom questions.
 - **`__main__.py`** — standalone CLI (periodic captioning).
 
 ## Standalone CLI

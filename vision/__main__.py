@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import argparse
 
-from vision.common.env import init_env
-from vision.common.logging import get_logger
+from dotenv import find_dotenv, load_dotenv
+
+from shared.logging import get_logger
 from vision.pipeline import VisionPipeline
 
 logger = get_logger("vision.__main__", log_file="vision.log")
-init_env()
+load_dotenv(find_dotenv())
 
 
 def main() -> None:

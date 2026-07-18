@@ -9,13 +9,14 @@ import cv2
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
-from vision.common.env import init_env
-from vision.common.logging import get_logger
+from dotenv import find_dotenv, load_dotenv
+
+from shared.logging import get_logger
 from vision.vlm.base import VLMResponse, VisionLanguageModel
 
 logger = get_logger("vision.vlm.openai", log_file="vision_vlm_openai.log")
 
-init_env()
+load_dotenv(find_dotenv())
 
 
 def _frame_to_data_url(frame, encode: str = ".jpg") -> str:
@@ -42,7 +43,7 @@ class OpenAIVisionLM(VisionLanguageModel):
         self._model = model
         resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not resolved_key:
-            raise RuntimeError("OPENAI_API_KEY is not set (load it via init_env / .env).")
+            raise RuntimeError("OPENAI_API_KEY is not set (load it via .env).")
         self._llm = ChatOpenAI(
             model=model,
             temperature=temperature,

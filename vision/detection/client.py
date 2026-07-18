@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from vision.common.client import VisionClient
-from vision.common.logging import get_logger
+from shared.logging import get_logger
 from vision.common.paths import model_path
 from vision.common.types import Detection, FrameResult
 from vision.detection.base import ObjectDetector
@@ -11,17 +10,15 @@ from vision.detection.factory import create_detector
 
 logger = get_logger("vision.detection.client", log_file="vision_detection.log")
 
-DEFAULT_MODEL_PATH = model_path("yolo11m.pt")
+DEFAULT_MODEL_PATH = model_path("yolo11n.pt")
 
 
-class DetectionClient(VisionClient):
+class DetectionClient:
     """Runs object detection on a frame and extends a FrameResult.
 
-    Single entry point used by ``detection/__main__.py`` (CLI) and by the
-    orchestrating pipeline.
+    Standalone entry point used by ``detection/__main__.py`` (CLI) and composed
+    by ``VisionPipeline`` — the only place that joins vision modules together.
     """
-
-    name = "detection"
 
     def __init__(
         self,

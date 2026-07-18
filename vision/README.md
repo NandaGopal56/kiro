@@ -1,31 +1,33 @@
 # Vision Subsystem
 
 A modular computer-vision pipeline for detection, tracking, and vision-language
-modeling (VLM). Each capability is a self-contained module with a single client
-entry point that is reused both by its own CLI (`__main__`) and by the
-orchestrating `VisionPipeline`.
+modeling (VLM). Each capability is an **independent module** with its own client
+and `__main__` for standalone CLI use. The modules are joined *only* by
+`VisionPipeline`, which is the single orchestrator.
 
 ## Module READMEs
 
 Each submodule has its own README with detailed usage and extension notes:
 
-- [`vision/common`](common/README.md) — shared client interface, env, paths, types
+- [`vision/common`](common/README.md) — shared env, paths, types (no behavior)
 - [`vision/detection`](detection/README.md) — object detection (YOLO)
-- [`vision/tracking`](tracking/README.md) — object tracking (dummy / extensible)
+- [`vision/tracking`](tracking/README.md) — object tracking (IoU-stable IDs)
 - [`vision/vlm`](vlm/README.md) — vision-language model (OpenAI via LangChain)
 
 ## Design
 
-- **Common interface** — `vision/common/client.py` defines `VisionClient` with a
-  single `run(frame, result) -> FrameResult` method. Every module
-  (`detection`, `tracking`, `vlm`) subclasses it.
-- **One entry point per module** — each module exposes a `client.py` (the
-  `VisionClient` implementation) and a `__main__.py` (standalone CLI). The same
-  client object is what the orchestrator composes, so there is exactly one code
-  path per capability.
-- **One orchestrator** — `vision/pipeline.py` (`VisionPipeline`) is the only
-  place that wires modules together. It runs real-time perception
+- **Independent modules** — `detection`, `tracking`, and `vlm` do not depend on
+  each other. Each exposes a concrete client (`DetectionClient`,
+  `TrackingClient`, `VLMClient`) and a `__main__` for standalone runs.
+- **Joined only by the pipeline** — `vision/pipeline.py` (`VisionPipeline`) is
+  the *only* place that wires the modules together, sharing a `FrameResult`
+  contract (defined in `common/types.py`). There is no shared base class
+  coupling the modules.
+- **One orchestrator** — `VisionPipeline` runs real-time perception
   (detect → track) and calls the slower VLM on a throttled cadence.
+- **Cross-subsystem join** — vision is composed with agents/STT/TTS/RAG at the
+  `kiro/` runtime layer, *not* inside `vision/`. Vision keeps to perception;
+  `kiro/` keeps to system orchestration.
 - **Shared concerns** — `.env` loading (`vision/common/env.py`) and model paths
   (`vision/common/paths.py`) live in `common/` and are reused everywhere, with
   no hardcoded paths.
@@ -34,28 +36,27 @@ Each submodule has its own README with detailed usage and extension notes:
 
 ```
 vision/
-├── __init__.py            # exports VisionClient, VisionPipeline; loads .env
+├── __init__.py            # exports VisionPipeline; loads .env
 ├── __main__.py            # top-level CLI → VisionPipeline.run_camera
 ├── common/
-│   ├── client.py          # VisionClient ABC (common interface)
 │   ├── env.py             # init_env(): load_dotenv(find_dotenv())
 │   ├── paths.py           # project_root() / model_dir() / model_path()
 │   ├── logging.py         # re-export of shared.logging
 │   └── types.py           # Detection, Track, Identity, FrameResult
 ├── detection/
-│   ├── client.py          # DetectionClient(VisionClient)
+│   ├── client.py          # DetectionClient (standalone entry point)
 │   ├── __main__.py        # standalone detection CLI
 │   ├── base.py            # ObjectDetector ABC
 │   ├── factory.py         # create_detector("yolo")
 │   └── yolo.py            # YOLODetector (ultralytics)
 ├── tracking/
-│   ├── client.py          # TrackingClient(VisionClient)
+│   ├── client.py          # TrackingClient (standalone entry point)
 │   ├── __main__.py        # standalone detection+track CLI
 │   ├── base.py            # ObjectTracker ABC
 │   ├── factory.py         # create_tracker("yolo" / "bytetrack")
-│   └── yolo.py            # YOLOTracker (BoT-SORT / ByteTrack via ultralytics)
+│   └── yolo.py            # YOLOTracker (IoU-stable IDs)
 ├── vlm/
-│   ├── client.py          # VLMClient(VisionClient)
+│   ├── client.py          # VLMClient (standalone entry point)
 │   ├── __main__.py        # standalone VLM caption CLI
 │   ├── base.py            # VisionLanguageModel ABC + VLMQuery/VLMResponse
 │   ├── factory.py         # create_vlm("openai")

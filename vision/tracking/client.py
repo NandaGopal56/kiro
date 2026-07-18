@@ -3,8 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from vision.common.client import VisionClient
-from vision.common.logging import get_logger
+from shared.logging import get_logger
 from vision.common.types import Detection, FrameResult, Track
 from vision.tracking.base import ObjectTracker
 from vision.tracking.factory import create_tracker
@@ -12,18 +11,16 @@ from vision.tracking.factory import create_tracker
 logger = get_logger("vision.tracking.client", log_file="vision_tracking.log")
 
 
-class TrackingClient(VisionClient):
+class TrackingClient:
     """Associates detections across frames into stable tracks (extends FrameResult).
 
     When the underlying tracker supports a combined detect+track forward
     (``detect_and_track``), this client is the single YOLO pass for the frame
     and also fills ``result.detections`` — avoiding a redundant detection stage.
 
-    Single entry point used by ``tracking/__main__.py`` (CLI) and by the
-    orchestrating pipeline.
+    Standalone entry point used by ``tracking/__main__.py`` (CLI) and composed
+    by ``VisionPipeline``.
     """
-
-    name = "tracking"
 
     def __init__(
         self,

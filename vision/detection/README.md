@@ -1,7 +1,7 @@
 # vision/detection
 
-Object detection module. Implements the `VisionClient` interface so it can run
-standalone via `__main__` or be composed by `VisionPipeline`.
+Object detection module. Runs standalone via `__main__` or is composed by
+`VisionPipeline` (the only place modules are joined).
 
 ## Files
 
@@ -9,8 +9,8 @@ standalone via `__main__` or be composed by `VisionPipeline`.
 - **`factory.py`** — `create_detector("yolo", model_path)` builder.
 - **`yolo.py`** — `YOLODetector` using `ultralytics` YOLO (downloads
   `yolo11m.pt` into the root `.models/` on first use if absent).
-- **`client.py`** — `DetectionClient(VisionClient)`, the single entry point.
-  Extends a `FrameResult` with `detections`.
+- **`client.py`** — `DetectionClient`, the standalone entry point. Extends a
+  `FrameResult` with `detections`.
 - **`__main__.py`** — standalone CLI.
 
 ## Standalone CLI

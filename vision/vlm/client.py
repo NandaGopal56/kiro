@@ -2,26 +2,24 @@ from __future__ import annotations
 
 from typing import Optional
 
-from vision.common.client import VisionClient
-from vision.common.env import init_env
-from vision.common.logging import get_logger
+from dotenv import find_dotenv, load_dotenv
+
+from shared.logging import get_logger
 from vision.common.types import FrameResult
 from vision.vlm.base import VLMResponse, VisionLanguageModel
 from vision.vlm.factory import create_vlm
 
 logger = get_logger("vision.vlm.client", log_file="vision_vlm.log")
 
-init_env()
+load_dotenv(find_dotenv())
 
 
-class VLMClient(VisionClient):
+class VLMClient:
     """Runs a vision-language model on a frame given a prompt (extends FrameResult).
 
-    Single entry point used by ``vlm/__main__.py`` (CLI) and by the
-    orchestrating pipeline (for captions / on-demand QA).
+    Standalone entry point used by ``vlm/__main__.py`` (CLI) and composed by
+    ``VisionPipeline`` (for captions / on-demand QA).
     """
-
-    name = "vlm"
 
     def __init__(self, backend: str = "openai", **kwargs):
         self.vlm: VisionLanguageModel = create_vlm(backend, **kwargs)

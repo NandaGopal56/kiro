@@ -5,7 +5,7 @@ from typing import Optional
 
 from ultralytics import YOLO
 
-from vision.common.logging import get_logger
+from shared.logging import get_logger
 from vision.common.paths import model_path as resolve_model_path
 from vision.common.types import Detection, Track
 from vision.tracking.base import ObjectTracker

@@ -1,8 +1,8 @@
 # vision/tracking
 
 Object tracking module. Associates detections across frames into stable track
-IDs using a real multi-object tracker. Implements the `VisionClient` interface
-so it can run standalone (`__main__`) or be composed by `VisionPipeline`.
+IDs using a real multi-object tracker. Runs standalone (`__main__`) or is
+composed by `VisionPipeline` (the only place modules are joined).
 
 ## Files
 
@@ -14,8 +14,8 @@ so it can run standalone (`__main__`) or be composed by `VisionPipeline`.
   `model.track()` with `persist=True`, so the same physical object keeps a
   stable `track_id` across frames. Class labels are read from the detection
   stage's model names.
-- **`client.py`** — `TrackingClient(VisionClient)`, the single entry point.
-  Reads `result.detections` and extends `FrameResult` with `tracks`.
+- **`client.py`** — `TrackingClient`, the standalone entry point. Reads
+  `result.detections` and extends `FrameResult` with `tracks`.
 - **`__main__.py`** — standalone CLI (runs detection + tracking).
 
 ## Standalone CLI

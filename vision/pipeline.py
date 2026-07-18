@@ -4,8 +4,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from vision.common.client import VisionClient
-from vision.common.logging import get_logger
+from shared.logging import get_logger
 from vision.common.paths import model_path
 from vision.common.types import FrameResult
 from vision.detection.client import DetectionClient

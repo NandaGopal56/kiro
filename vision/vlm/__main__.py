@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import argparse
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
-from vision.common.logging import get_logger
+from shared.logging import get_logger
 from vision.vlm.client import VLMClient
 
 logger = get_logger("vision.vlm.__main__", log_file="vision_vlm.log")
-load_dotenv()
+load_dotenv(find_dotenv())
 
 
 def _camera_caption(client: VLMClient, prompt: str, every_n: int, max_frames: int = 0) -> None:
